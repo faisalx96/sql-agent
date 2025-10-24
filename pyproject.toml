@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "agents-sdk-example"
+name = "sql-agent"
 version = "0.1.0"
 description = "Minimal agent scaffold using OpenAI (Python) with a simple built-in UI"
 authors = ["Your Team <team@example.com>"]
@@ -20,4 +20,3 @@ black = "^24.8.0"
 [build-system]
 requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
-

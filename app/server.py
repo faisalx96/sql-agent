@@ -60,7 +60,7 @@ agent = Agent(
     ),
 )
 
-app = FastAPI(title="Agents SDK Example")
+app = FastAPI(title="SQL Agent")
 
 static_dir = Path(__file__).parent / "ui" / "static"
 app.mount("/static", StaticFiles(directory=static_dir), name="static")

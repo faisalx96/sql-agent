@@ -1,13 +1,15 @@
-Agents SDK Example (Python)
+SQL Agent (Python)
 
 What this is
 - A minimal, opinionated recipe to spin up an agent quickly using the OpenAI Python SDK and function-calling tools, with a tiny web UI that “just works”.
 - Drop it into a repo and start iterating on POCs without wiring a custom UI each time.
 
 What’s included
-- FastAPI app with a dead-simple chat UI (no frameworks on the client side).
-- Agent core that supports tool-calling and a small standard toolset (list/read/write/search files within a workspace directory), plus SQL tools for schema + querying.
-- Environment-driven config and a dedicated workspace folder that’s safe to target with tools.
+- FastAPI app with a lightweight, modern UI (Vue 3 + Tailwind via CDN; no build step).
+- Agent core that supports tool-calling and a small standard toolset (list/read/write/search files within a workspace directory), plus SQL tools for schema + querying (read-only).
+- Live streaming: tool calls/results stream as they happen, followed by the assistant’s reply.
+- Pretty SQL view in the tool panel, plus a compact “Result preview” table for quick inspection.
+- Environment-driven config and a dedicated workspace folder for file operations.
 - Clear extension points to add tools and change the model or system prompt.
 
 Why not Streamlit? This aims for a native-feeling, dependency-light UI that runs anywhere you can start a web server. No ceremony, no extra app shell.
@@ -34,11 +36,13 @@ Quickstart
 Folder layout
 - app/
   - config.py: Loads env, creates workspace directory.
-  - agent/core.py: Agent orchestration and tool-call loop.
+  - agent/core.py: Agent orchestration and tool-call loop (utility; server currently streams directly).
   - agent/tools.py: Built-in file tools and tool registry.
   - agent/sql_tools.py: SQL tools (schema and read-only query).
-  - server.py: FastAPI server + endpoints; minimal streaming.
-  - ui/static/: Barebones HTML/CSS/JS chat.
+  - server.py: FastAPI server + endpoints; live tool + text streaming.
+  - ui/static/: Vue + Tailwind assets (CDN) for the chat UI.
+- scripts/
+  - seed_db.py: Seed/reset the SQLite DB with demo data (customers/products/orders).
 - workspace/: Safe area for file tools; persisted locally.
 
 Config
@@ -51,16 +55,18 @@ Config
 
 Extending tools
 - Add or modify tools in app/agent/tools.py. Each ToolSpec has name, description, JSON schema, and a Python function.
-- Tools are exposed to the model via OpenAI function calling. The agent loop handles execution and returns results back to the model.
+- Tools are exposed to the model via OpenAI function calling. The server’s streaming loop executes tool calls and streams back results.
 
 Swapping in the OpenAI Agents SDK
-- This scaffold purposely concentrates the model call in Agent.respond(). If your org uses the new OpenAI Agents SDK/runtime, wire it in there:
-  - Replace the chat.completions call with your Agents SDK call.
-  - Propagate tool results back to the agent runtime as required by that API.
-  - Keep the messages list format {role, content} so the UI and session store keep working unchanged.
+- Integration point: the chat.completions call inside app/server.py (the streaming loop). Swap it for your Agents SDK runtime and wire tool events accordingly.
+- Keep the messages list format {role, content} so the UI and session store keep working unchanged.
 
 Notes on streaming
-- The UI uses minimal newline-delimited JSON for streaming. The server executes tool-calls first and then streams the final assistant text in small chunks for a responsive feel. This keeps the code simple while remaining robust.
+- The server streams newline-delimited JSON (NDJSON) events:
+  - {"type":"tool_call", "id", "name", "arguments"}
+  - {"type":"tool_result", "id", "name", "output"}
+  - {"chunk":"..."} and {"done":true} for the assistant’s text
+- The UI shows live tool panels (with pretty SQL and JSON I/O), a “Result preview” grid for sql_query, and a live timer.
 
 Security considerations
 - File tools are constrained to WORKSPACE_DIR and reject path traversal. Still, treat this as a dev/POR scaffold, not a production sandbox.
@@ -79,26 +85,21 @@ License
 - Intended as an internal template/recipe. Add your org’s standard header/policy if needed.
 
 SQL Agent usage
-- The system prompt configures the agent as a read-only data scientist. It queries a SQLite database via tools:
+- The system prompt configures a read-only “data scientist” persona that answers with one short, business-friendly summary sentence (no tables by default).
+- Tools:
   - sql_schema: discover tables/columns and row counts
   - sql_query: run read-only SELECT/CTE and return rows (defaults to LIMIT 100)
   - No DDL/DML tools are exposed; requests to change data/schema should be declined.
+- Naming guidance: Prefer human-readable names over IDs; join customers/products to include name/label columns; alias to short business labels.
 
 Initial database
 - Default DB path: workspace/agent.db (created on first connection).
-- Create tables/data manually (the agent is read-only):
-  - python - <<'PY'
-from app.db import Database
-from app.config import Config
-cfg = Config.load()
-db = Database(cfg.database_url)
-db.execute("CREATE TABLE IF NOT EXISTS customers(id INTEGER PRIMARY KEY, name TEXT, city TEXT);")
-db.execute("INSERT INTO customers(name, city) VALUES(?, ?)", ["Alice", "NYC"])
-print(db.schema())
-PY
+- Seed or reset with demo data:
+  - PYTHONPATH=. python scripts/seed_db.py --reset --customers 60 --products 50 --orders 500
+  - Omit --reset to keep existing rows and only fill if empty.
 
 Examples to try in the UI
 - "What tables are available?"
-- "How many customers are in NYC?"
-- "Show the top 5 orders by amount with the customer name."
-- "Can we calculate average order value by city?"
+- "How many orders per customer?"
+- "Which product generates the most revenue?"
+- "Average order value by city (summary only)."
