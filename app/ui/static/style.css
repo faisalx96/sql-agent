@@ -1,0 +1,26 @@
+:root{
+  --bg:#0f1115; --panel:#151822; --text:#e6e6e6; --muted:#a0a0a0; --accent:#70b0ff;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 system-ui,Segoe UI,Roboto}
+.app{max-width:900px;margin:0 auto;padding:16px;height:100vh;display:flex;flex-direction:column;gap:12px}
+header{display:flex;align-items:center;justify-content:space-between}
+h1{margin:0;font-size:18px}
+button{background:var(--panel);color:var(--text);border:1px solid #2a2f3b;border-radius:8px;padding:8px 10px;cursor:pointer}
+button:hover{border-color:#3a4152}
+main{flex:1;overflow:auto;border:1px solid #22283a;border-radius:10px;padding:12px;background:linear-gradient(180deg,#111420,#0f1115)}
+.msg{padding:10px 12px;border-radius:10px;margin:8px 0;white-space:pre-wrap}
+.user{background:#1e2536}
+.assistant{background:#16202d}
+.tool{background:#1c1f2b;color:var(--muted)}
+footer{padding:8px;border-radius:10px;background:var(--panel);border:1px solid #22283a}
+input{width:100%;padding:10px 12px;background:transparent;color:var(--text);border:1px solid #2a2f3b;border-radius:8px;outline:none}
+input:focus{border-color:var(--accent)}
+
+/* Improve markdown table readability */
+.prose table{width:100%; border-collapse:separate; border-spacing:0;}
+.prose thead th{position:sticky; top:0; background:#0f1115;}
+.prose table th,.prose table td{border:1px solid #2a2f3b; padding:6px 8px;}
+.prose tbody tr:nth-child(odd){background:#0e1320}
+.prose tbody tr:nth-child(even){background:#0b0f1a}
+.prose code{background:#0b0f1a; padding:1px 4px; border-radius:4px; border:1px solid #1f2433}

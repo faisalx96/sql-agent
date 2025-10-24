@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agents SDK Example</title>
+    <meta name="color-scheme" content="dark light" />
+    <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.9.0/styles/github-dark.min.css">
+    <link rel="stylesheet" href="/static/style.css" />
+    <script>
+      tailwind.config = { theme: { extend: {} } };
+    </script>
+  </head>
+  <body class="bg-slate-950 text-slate-100">
+    <div id="app" class="h-dvh max-w-5xl mx-auto px-3 py-4 flex flex-col gap-3">
+      <header class="flex items-center justify-between gap-3">
+        <div class="flex items-center gap-3">
+          <div class="size-8 rounded-lg bg-sky-500/20 border border-sky-500/30 grid place-items-center">
+            <span class="text-sky-300 text-sm font-semibold">SQL</span>
+          </div>
+          <div>
+            <h1 class="m-0 text-base font-semibold">Data Scientist Agent</h1>
+            <p class="m-0 text-xs text-slate-400">Read-only. Answers using SQL via tools.</p>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-slate-400 hidden sm:inline" v-if="model">Model: {{ model }}</span>
+          <button @click="newChat" class="px-3 py-1.5 rounded-md bg-slate-800 border border-slate-700 hover:border-slate-600 text-sm">New Chat</button>
+        </div>
+      </header>
+
+      <main id="chat" class="flex-1 overflow-auto rounded-xl border border-slate-800 bg-gradient-to-b from-slate-900 to-slate-950 p-3">
+        <div v-for="(m, idx) in messages" :key="idx" class="my-2">
+          <div :class="m.role === 'user' ? 'bg-slate-800/70 border-slate-700' : 'bg-slate-900/70 border-slate-800'" class="msg border rounded-xl p-3">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs uppercase tracking-wide text-slate-400">{{ m.role }}</span>
+              <div class="flex items-center gap-2">
+                <button @click="copyText(m.content)" class="text-xs text-slate-400 hover:text-slate-200">Copy</button>
+              </div>
+            </div>
+            <div v-if="m.role==='assistant' && m.tools && m.tools.length" class="mb-3 space-y-2">
+              <div v-for="(t, i) in m.tools" :key="i" class="rounded-md border border-slate-700 bg-slate-900/60 overflow-hidden">
+                <div class="px-3 py-2 text-xs flex items-center justify-between gap-2 border-b border-slate-800">
+                  <div class="flex items-center gap-3 text-slate-300">
+                    <span class="inline-flex items-center justify-center size-5 rounded bg-slate-800 border border-slate-700 text-[10px]">{{ i+1 }}</span>
+                    <span class="font-semibold">{{ t.name }}</span>
+                    <span class="text-slate-400">— {{ toolSummary(t) }}</span>
+                    <span class="text-slate-500">
+                      <template v-if="t.output">Finished in {{ formatDuration(toolElapsed(t)) }}</template>
+                      <template v-else>Running… {{ formatDuration(toolElapsed(t)) }}</template>
+                    </span>
+                  </div>
+                  <button @click="toggleTool(t)" class="text-slate-400 hover:text-slate-200 inline-flex items-center gap-1">
+                    <span class="hidden sm:inline">{{ t.expanded ? 'Hide details' : 'Show details' }}</span>
+                    <svg :class="t.expanded ? 'rotate-180' : ''" class="size-4 transition-transform" viewBox="0 0 20 20" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.085l3.71-3.854a.75.75 0 111.08 1.04l-4.24 4.4a.75.75 0 01-1.08 0l-4.24-4.4a.75.75 0 01.02-1.06z" clip-rule="evenodd"/></svg>
+                  </button>
+                </div>
+                <div v-show="t.expanded" class="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3">
+                  <!-- Pretty SQL view for sql_query inputs -->
+                  <div v-if="t.name==='sql_query' && t.arguments && t.arguments.sql" class="sm:col-span-2">
+                    <div class="flex items-center justify-between mb-1">
+                      <div class="text-xs text-slate-400">SQL</div>
+                      <button @click="copyText(t.arguments.sql)" class="text-xs text-slate-400 hover:text-slate-200">Copy</button>
+                    </div>
+                    <pre class="text-xs overflow-auto"><code class="language-sql" v-html="renderSQL(t.arguments.sql)"></code></pre>
+                  </div>
+                  <div>
+                    <div class="flex items-center justify-between mb-1">
+                      <div class="text-xs text-slate-400">Input</div>
+                      <button @click="copyJSON(t.arguments)" class="text-xs text-slate-400 hover:text-slate-200">Copy</button>
+                    </div>
+                    <pre class="text-xs overflow-auto"><code class="language-json" v-html="renderCode(t.arguments)"></code></pre>
+                  </div>
+                  <div>
+                    <div class="flex items-center justify-between mb-1">
+                      <div class="text-xs text-slate-400">Output</div>
+                      <button @click="copyJSON(t.output)" class="text-xs text-slate-400 hover:text-slate-200">Copy</button>
+                    </div>
+                    <pre class="text-xs overflow-auto"><code class="language-json" v-html="renderCode(t.output)"></code></pre>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div v-if="m.role==='assistant' && m.preview && m.preview.columns && m.preview.rows" class="mb-3 rounded-md border border-slate-700 overflow-hidden">
+              <div class="px-3 py-2 text-xs flex items-center justify-between gap-2 bg-slate-900/60 border-b border-slate-800">
+                <div class="text-slate-300">
+                  Result preview <span class="text-slate-400">— {{ previewRowCount(m.preview) }} rows</span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <button @click="m.previewExpanded = !m.previewExpanded" class="text-xs text-slate-400 hover:text-slate-200">{{ m.previewExpanded ? 'Show less' : 'Show more' }}</button>
+                  <button @click="copyCSV(m.preview)" class="text-xs text-slate-400 hover:text-slate-200">Copy CSV</button>
+                </div>
+              </div>
+              <div class="overflow-auto">
+                <table class="w-full text-sm">
+                  <thead>
+                    <tr>
+                      <th v-for="(c, ci) in m.preview.columns" :key="ci" class="text-left px-3 py-2 border-b border-slate-800 bg-slate-900/70">{{ c }}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(r, ri) in (m.previewExpanded ? m.preview.rows : m.preview.rows.slice(0, 10))" :key="ri" class="border-b border-slate-900/50">
+                      <td v-for="(c, ci) in m.preview.columns" :key="ci" class="px-3 py-2 whitespace-nowrap">{{ r[ci] }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div v-if="m.role==='assistant'" class="prose prose-invert max-w-none" v-html="renderMarkdown(m.content)"></div>
+            <div v-else class="whitespace-pre-wrap">{{ m.content }}</div>
+          </div>
+        </div>
+        <div v-if="streaming" class="text-xs text-slate-400 px-1">Thinking… {{ formatDuration(turnElapsed()) }}</div>
+      </main>
+
+      <footer class="rounded-xl bg-slate-900 border border-slate-800 p-3">
+        <form @submit.prevent="onSubmit" class="flex items-end gap-2">
+          <textarea v-model="input" @keydown.enter.exact.prevent="onSubmit" @keydown.enter.shift.stop class="flex-1 resize-none h-12 max-h-44 rounded-lg bg-slate-950 border border-slate-800 focus:border-sky-500/60 outline-none px-3 py-2 text-sm" placeholder="Ask a question about your data. Shift+Enter for newline"></textarea>
+          <button type="submit" :disabled="!input || streaming" class="px-4 py-2 rounded-lg text-sm font-medium bg-sky-600 disabled:bg-slate-700 disabled:text-slate-400 hover:bg-sky-500">Send</button>
+        </form>
+      </footer>
+    </div>
+
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.7/dist/purify.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.9.0/highlight.min.js"></script>
+    <script src="/static/app.js"></script>
+  </body>
+  </html>

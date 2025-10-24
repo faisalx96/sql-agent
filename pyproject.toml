@@ -1,0 +1,23 @@
+[tool.poetry]
+name = "agents-sdk-example"
+version = "0.1.0"
+description = "Minimal agent scaffold using OpenAI (Python) with a simple built-in UI"
+authors = ["Your Team <team@example.com>"]
+package-mode = false
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.13"
+openai = "^1.51.0"
+fastapi = "^0.115.0"
+uvicorn = {version = "^0.30.0", extras = ["standard"]}
+python-dotenv = "^1.0.1"
+orjson = "^3.10.7"
+
+[tool.poetry.group.dev.dependencies]
+ruff = "^0.6.5"
+black = "^24.8.0"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+

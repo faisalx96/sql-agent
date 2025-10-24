@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+.pytest_cache/
+.venv/
+*.pyc
+
+# Env
+.env
+
+# Node/Front-end build (none yet)
+dist/
+build/
+
+# Misc
+.DS_Store
+
