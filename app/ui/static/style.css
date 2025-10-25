@@ -19,12 +19,12 @@ input{width:100%;padding:10px 12px;background:transparent;color:var(--text);bord
 input:focus{border-color:var(--accent)}
 
 /* Improve markdown table readability */
-.prose table{width:100%; border-collapse:separate; border-spacing:0;}
+/* .prose table{width:100%; border-collapse:separate; border-spacing:0;}
 .prose thead th{position:sticky; top:0; background:#0f1115;}
 .prose table th,.prose table td{border:1px solid #2a2f3b; padding:6px 8px;}
 .prose tbody tr:nth-child(odd){background:#0e1320}
 .prose tbody tr:nth-child(even){background:#0b0f1a}
-.prose code{background:#0b0f1a; padding:1px 4px; border-radius:4px; border:1px solid #1f2433}
+.prose code{background:#0b0f1a; padding:1px 4px; border-radius:4px; border:1px solid #1f2433} */
 
 /* Theme overrides (light) */
 [data-theme="light"] body{background:#f8fafc;color:#0f172a}
@@ -47,13 +47,22 @@ input:focus{border-color:var(--accent)}
 /* Reduced motion */
 [data-reduce-motion="1"] *{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important}
 
-/* Tighter typography for assistant Markdown */
-.prose{line-height:1.45}
-.prose p{margin-top:.3em;margin-bottom:.3em;line-height:1.45}
-.prose ul,.prose ol{margin-top:.35em;margin-bottom:.35em;padding-left:1.1em}
-.prose li{margin-top:.18em;margin-bottom:.18em}
-.prose h1,.prose h2,.prose h3,.prose h4,.prose h5,.prose h6{margin-top:.6em;margin-bottom:.25em;line-height:1.25}
-.prose pre{margin-top:.4em;margin-bottom:.4em}
-.prose blockquote{margin:.4em 0;padding-left:.8em}
+/* Ultra-tight typography for assistant Markdown (override Tailwind Typography) */
+.prose{line-height:1 !important}
+.prose p{margin:.1em 0 !important;line-height:1 !important}
+/* Remove extra gaps around lists entirely */
+.prose ul,.prose ol{margin:0 !important;padding-left:1.1em !important}
+.prose li{margin:0 !important}
+/* Marked wraps list items as <li><p>…</p></li> – remove the inner p margins */
+.prose li>p{margin:0 !important}
+/* Also remove any top margin between multiple children inside li */
+.prose li>*+*{margin-top:0 !important}
+/* Tighten headings a bit more */
+.prose h1,.prose h2,.prose h3,.prose h4,.prose h5,.prose h6{margin-top:.35em !important;margin-bottom:.12em !important;line-height:1 !important}
+.prose pre{margin:.15em 0 !important}
+.prose blockquote{margin:.15em 0 !important;padding-left:.6em !important}
+/* Trim outer margins of the first/last element in a block */
+.prose>:first-child{margin-top:0 !important}
+.prose>:last-child{margin-bottom:0 !important}
 
 /* Use default browser bullets for assistant markdown lists (no overrides) */

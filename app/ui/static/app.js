@@ -20,6 +20,7 @@
       const input = ref('');
       const inputEl = ref(null);
       const model = ref('');
+      const allowedModels = ref([]);
       const streaming = ref(false);
       const sidebarOpen = ref(false);
       const sessions = ref([]); // {id, title, created_at, updated_at}
@@ -125,7 +126,7 @@
         }
       }
       async function createChat() {
-        const res = await fetch('/api/new_chat', { method: 'POST' });
+        const res = await fetch('/api/new_chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: model.value || undefined }) });
         const data = await res.json();
         chatId.value = data.chat_id;
         messages.value = [];
@@ -143,6 +144,7 @@
           const r = await fetch(`/api/sessions/${encodeURIComponent(id)}`);
           if (r.ok) {
             const d = await r.json();
+            if (d && d.model) { model.value = d.model; }
             const list = Array.isArray(d.messages) ? d.messages : [];
             // Reconstruct assistant tool panels by pairing tool_calls with tool results
             const out = [];
@@ -311,7 +313,7 @@
         // Close settings on Escape
         onKey = (e) => { if (e.key === 'Escape') showSettings.value = false; };
         window.addEventListener('keydown', onKey);
-        try { const r = await fetch('/api/meta'); if (r.ok) { const d = await r.json(); model.value = d.model || ''; } } catch {}
+        try { const r = await fetch('/api/meta'); if (r.ok) { const d = await r.json(); model.value = d.model || ''; allowedModels.value = Array.isArray(d.allowed_models) ? d.allowed_models : []; } } catch {}
         await refreshSessions();
         const first = sortedSessions()[0];
         if (first) {
@@ -400,9 +402,22 @@
 
       function toggleRender(m) { m.renderRaw = !m.renderRaw; }
 
+      async function applyModel(newModel) {
+        if (!chatId.value) return;
+        const name = String(newModel || '').trim();
+        if (!name) return;
+        try {
+          await fetch(`/api/sessions/${encodeURIComponent(chatId.value)}`, {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: name })
+          });
+          model.value = name;
+          toast(`Model set to ${name}`);
+        } catch {}
+      }
+
       function previewRowCount(preview) { if (!preview) return 0; if (preview.rowcount !== undefined && preview.rowcount !== null) return preview.rowcount; if (Array.isArray(preview.rows)) return preview.rows.length; return 0; }
 
-      return { chatId, messages, input, inputEl, streaming, model, sidebarOpen, sessions, loadingSessions, loadingChat, showSettings, settings, toasts, newChat, createChat, selectChat, renameChat, deleteChat, onSubmit, stopStreaming, retryLast, canRetry, copyText, renderMarkdown, renderCode, renderSQL, toolSummary, displayTitle, toggleTool, toolError, copyJSON, copyCSV, downloadCSV, previewRowCount, toolElapsed, formatDuration, turnElapsed, sortedSessions, formatTimeAgo, autosize, saveSettings, toggleRender };
+      return { chatId, messages, input, inputEl, streaming, model, allowedModels, sidebarOpen, sessions, loadingSessions, loadingChat, showSettings, settings, toasts, newChat, createChat, selectChat, renameChat, deleteChat, onSubmit, stopStreaming, retryLast, canRetry, copyText, renderMarkdown, renderCode, renderSQL, toolSummary, displayTitle, toggleTool, toolError, copyJSON, copyCSV, downloadCSV, previewRowCount, toolElapsed, formatDuration, turnElapsed, sortedSessions, formatTimeAgo, autosize, saveSettings, toggleRender, applyModel };
     }
   }).mount('#app');
 })();

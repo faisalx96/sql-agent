@@ -13,6 +13,7 @@ class SessionMeta:
     title: str
     created_at: int
     updated_at: int
+    model: str | None = None
 
 
 class SessionStore:
@@ -53,10 +54,11 @@ class SessionStore:
                     title=s.get("title") or "",
                     created_at=int(s.get("created_at") or 0),
                     updated_at=int(s.get("updated_at") or 0),
+                    model=s.get("model"),
                 ))
             return metas
 
-    def create(self, chat_id: str, *, title: str, created_at: int) -> None:
+    def create(self, chat_id: str, *, title: str, created_at: int, model: str | None = None) -> None:
         with self._lock:
             sessions = self._data.setdefault("sessions", {})
             if chat_id not in sessions:
@@ -65,6 +67,7 @@ class SessionStore:
                     "created_at": int(created_at),
                     "updated_at": int(created_at),
                     "messages": [],
+                    "model": model,
                 }
                 self._save()
 
@@ -87,6 +90,7 @@ class SessionStore:
                 "created_at": int(updated_at),
                 "updated_at": int(updated_at),
                 "messages": [],
+                "model": None,
             })
             sess.setdefault("messages", []).append(message)
             sess["updated_at"] = int(updated_at)
@@ -102,6 +106,16 @@ class SessionStore:
             self._save()
             return True
 
+    def update_model(self, chat_id: str, model: str, *, updated_at: int) -> bool:
+        with self._lock:
+            sess = self._data.get("sessions", {}).get(chat_id)
+            if not sess:
+                return False
+            sess["model"] = model
+            sess["updated_at"] = int(updated_at)
+            self._save()
+            return True
+
     def delete(self, chat_id: str) -> bool:
         with self._lock:
             sessions = self._data.get("sessions", {})
@@ -110,4 +124,3 @@ class SessionStore:
                 self._save()
                 return True
             return False
-

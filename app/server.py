@@ -4,6 +4,7 @@ import asyncio
 import json
 import secrets
 from pathlib import Path
+import os
 from typing import Any, Dict, List
 
 import orjson
@@ -106,10 +107,29 @@ def index() -> HTMLResponse:
 
 @app.get("/api/meta")
 def meta() -> Dict[str, Any]:
-    """Basic app metadata for the UI."""
+    """Basic app metadata for the UI with a static model list."""
+    static_models = [
+        "gpt-4o",
+        "gpt-4o-mini",
+        "gpt-5",
+        "gpt-5-mini",
+        "gpt-5-nano",
+    ]
+    # Put current default first if present, dedupe while preserving order
+    ordered: list[str] = []
+    seen: set[str] = set()
+    if agent.model in static_models:
+        ordered.append(agent.model); seen.add(agent.model)
+    for mid in static_models:
+        if mid not in seen:
+            ordered.append(mid); seen.add(mid)
     return {
         "model": agent.model,
+        "allowed_models": ordered,
     }
+
+
+# The UI uses a static model list from /api/meta.allowed_models; live listing endpoint removed per request.
 
 
 @app.get("/api/debug/tools")
@@ -156,6 +176,7 @@ def get_session(chat_id: str) -> Dict[str, Any]:
         "title": s.get("title") or "",
         "created_at": s.get("created_at"),
         "updated_at": s.get("updated_at"),
+        "model": s.get("model") or agent.model,
         "messages": s.get("messages", []),
     }
 
@@ -163,11 +184,17 @@ def get_session(chat_id: str) -> Dict[str, Any]:
 @app.patch("/api/sessions/{chat_id}")
 async def rename_session(chat_id: str, req: Request) -> Dict[str, Any]:
     body = await req.json()
-    title = str(body.get("title") or "").strip()
+    title = body.get("title")
+    model_name = body.get("model")
     import time
-    ok = store.rename(chat_id, title, updated_at=int(time.time() * 1000))
-    if not ok:
-        raise HTTPException(status_code=404, detail="not found")
+    if title is not None:
+        ok = store.rename(chat_id, str(title).strip(), updated_at=int(time.time() * 1000))
+        if not ok:
+            raise HTTPException(status_code=404, detail="not found")
+    if model_name is not None:
+        ok = store.update_model(chat_id, str(model_name).strip(), updated_at=int(time.time() * 1000))
+        if not ok:
+            raise HTTPException(status_code=404, detail="not found")
     return {"ok": True}
 
 
@@ -183,16 +210,19 @@ def delete_session(chat_id: str) -> Dict[str, Any]:
 async def new_chat(req: Request) -> Dict[str, str]:
     chat_id = secrets.token_hex(8)
     title = ""
+    model_name: str | None = None
     try:
         body = await req.json()
         if isinstance(body, dict):
             title = str(body.get("title") or "")
+            if body.get("model"):
+                model_name = str(body.get("model"))
     except Exception:
         pass
     # Use wall clock ms
     import time
     now_ms = int(time.time() * 1000)
-    store.create(chat_id, title=title, created_at=now_ms)
+    store.create(chat_id, title=title, created_at=now_ms, model=(model_name or agent.model))
     return {"chat_id": chat_id}
 
 
@@ -229,13 +259,24 @@ async def chat(req: Request):
                     for t in agent.tools
                 ] or None
                 logger.debug("requesting completion with tools=%s", [t.get("function",{}).get("name") for t in (tools_payload or [])])
-                resp = agent.client.chat.completions.create(
-                    model=agent.model,
+                # Determine model for this session
+                current_model = agent.model
+                sess_meta = store.get(chat_id)
+                if isinstance(sess_meta, dict):
+                    m = sess_meta.get("model")
+                    if m:
+                        current_model = str(m)
+
+                # Some models (e.g., gpt-5 family) do not accept non-default temperature.
+                create_kwargs: Dict[str, Any] = dict(
+                    model=current_model,
                     messages=agent.build_messages(history),
                     tools=tools_payload,
                     tool_choice="auto" if agent.tools else None,
-                    temperature=0.2,
                 )
+                if not str(current_model).lower().startswith("gpt-5"):
+                    create_kwargs["temperature"] = 0.2
+                resp = agent.client.chat.completions.create(**create_kwargs)
 
                 choice = resp.choices[0]
                 msg = choice.message
