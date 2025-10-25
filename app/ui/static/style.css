@@ -2,6 +2,7 @@
   --bg:#0f1115; --panel:#151822; --text:#e6e6e6; --muted:#a0a0a0; --accent:#70b0ff;
 }
 *{box-sizing:border-box}
+[v-cloak]{display:none!important}
 body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 system-ui,Segoe UI,Roboto}
 .app{max-width:900px;margin:0 auto;padding:16px;height:100vh;display:flex;flex-direction:column;gap:12px}
 header{display:flex;align-items:center;justify-content:space-between}
@@ -24,3 +25,35 @@ input:focus{border-color:var(--accent)}
 .prose tbody tr:nth-child(odd){background:#0e1320}
 .prose tbody tr:nth-child(even){background:#0b0f1a}
 .prose code{background:#0b0f1a; padding:1px 4px; border-radius:4px; border:1px solid #1f2433}
+
+/* Theme overrides (light) */
+[data-theme="light"] body{background:#f8fafc;color:#0f172a}
+[data-theme="light"] #chat{background:linear-gradient(180deg,#ffffff,#f8fafc)!important;border-color:#e2e8f0!important}
+[data-theme="light"] .msg{background:#ffffff!important;border-color:#e2e8f0!important}
+[data-theme="light"] .prose-invert{color:#0f172a}
+[data-theme="light"] .prose-invert a{color:#0ea5e9}
+[data-theme="light"] .prose-invert code{background:#f1f5f9;border-color:#e2e8f0;color:#0f172a}
+[data-theme="light"] .border-slate-800{border-color:#e2e8f0!important}
+[data-theme="light"] .border-slate-700{border-color:#e2e8f0!important}
+[data-theme="light"] .bg-slate-900{background:#ffffff!important}
+[data-theme="light"] .bg-slate-800\/70{background:rgba(241,245,249,.7)!important}
+[data-theme="light"] .bg-slate-900\/70{background:rgba(255,255,255,.7)!important}
+[data-theme="light"] .bg-slate-900\/60{background:rgba(255,255,255,.6)!important}
+[data-theme="light"] .bg-slate-950{background:#ffffff!important}
+[data-theme="light"] .text-slate-100{color:#0f172a!important}
+[data-theme="light"] .text-slate-400{color:#475569!important}
+[data-theme="light"] .text-slate-300{color:#334155!important}
+
+/* Reduced motion */
+[data-reduce-motion="1"] *{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important}
+
+/* Tighter typography for assistant Markdown */
+.prose{line-height:1.45}
+.prose p{margin-top:.3em;margin-bottom:.3em;line-height:1.45}
+.prose ul,.prose ol{margin-top:.35em;margin-bottom:.35em;padding-left:1.1em}
+.prose li{margin-top:.18em;margin-bottom:.18em}
+.prose h1,.prose h2,.prose h3,.prose h4,.prose h5,.prose h6{margin-top:.6em;margin-bottom:.25em;line-height:1.25}
+.prose pre{margin-top:.4em;margin-bottom:.4em}
+.prose blockquote{margin:.4em 0;padding-left:.8em}
+
+/* Use default browser bullets for assistant markdown lists (no overrides) */

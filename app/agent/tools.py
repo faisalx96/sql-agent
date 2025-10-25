@@ -23,6 +23,48 @@ def _safe_join(base: Path, *parts: str) -> Path:
 
 
 def make_tools(workspace: Path) -> List[ToolSpec]:
+    # UI helper: display a tabular result in the client
+    def display_result(args: Dict[str, Any]) -> Dict[str, Any]:
+        title = str(args.get("title") or "").strip()
+        columns = args.get("columns") or []
+        rows = args.get("rows") or []
+        rowcount = args.get("rowcount")
+        # Normalize types
+        if not isinstance(columns, list):
+            columns = []
+        if not isinstance(rows, list):
+            rows = []
+        # If rows are objects, convert to arrays in the order of columns (infer columns if missing)
+        if rows and isinstance(rows[0], dict):
+            # Infer columns from first row if not provided
+            if not columns:
+                keyset = set()
+                for r in rows:
+                    if isinstance(r, dict):
+                        keyset.update(r.keys())
+                columns = list(keyset)
+            conv = []
+            for r in rows:
+                if isinstance(r, dict):
+                    conv.append([r.get(c) for c in columns])
+                else:
+                    conv.append(r)
+            rows = conv
+        # Cap rows to a reasonable amount to avoid huge payloads
+        try:
+            max_rows = int(args.get("max_rows") or 200)
+        except Exception:
+            max_rows = 200
+        if len(rows) > max_rows:
+            rows = rows[:max_rows]
+        out: Dict[str, Any] = {
+            "title": title,
+            "columns": columns,
+            "rows": rows,
+        }
+        if rowcount is not None:
+            out["rowcount"] = rowcount
+        return out
     def list_files(_: Dict[str, Any]) -> Dict[str, Any]:
         files = []
         for root, _, filenames in os.walk(workspace):
@@ -67,12 +109,36 @@ def make_tools(workspace: Path) -> List[ToolSpec]:
         return {"query": query, "hits": hits}
 
     return [
+        # Note: display_result kept available in module but not exposed by default to the model
+        # ToolSpec(
+        #     name="display_result",
+        #     description=(
+        #         "Display a final tabular result in the UI. Provide columns (array of strings) and rows (array of arrays). "
+        #         "Use after computing an answer to show the table preview. Keep <= 200 rows."
+        #     ),
+        #     schema={
+        #         "type": "object",
+        #         "required": ["columns", "rows"],
+        #         "properties": {
+        #             "title": {"type": "string", "description": "Short title for the result"},
+        #             "columns": {"type": "array", "items": {"type": "string"}},
+        #             "rows": {"type": "array", "items": {"type": "object"}},
+        #             "rowcount": {"type": "integer"},
+        #             "max_rows": {"type": "integer", "minimum": 1, "maximum": 500, "default": 200},
+        #         },
+        #     },
+        #     func=display_result,
+        # ),
         ToolSpec(
             name="list_files",
-            description="List all files under the project workspace root.",
+            description=(
+                "List all files under the project workspace root."
+            ),
             schema={
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "title": {"type": "string", "description": "Short human title for this step (<= 6 words)", "default": "List files"},
+                },
             },
             func=list_files,
         ),
@@ -83,6 +149,7 @@ def make_tools(workspace: Path) -> List[ToolSpec]:
                 "type": "object",
                 "required": ["path"],
                 "properties": {
+                    "title": {"type": "string", "description": "Short human title (<= 6 words)"},
                     "path": {"type": "string", "description": "Relative path from workspace root"}
                 },
             },
@@ -95,6 +162,7 @@ def make_tools(workspace: Path) -> List[ToolSpec]:
                 "type": "object",
                 "required": ["path", "content"],
                 "properties": {
+                    "title": {"type": "string", "description": "Short human title (<= 6 words)"},
                     "path": {"type": "string"},
                     "content": {"type": "string"},
                 },
@@ -108,6 +176,7 @@ def make_tools(workspace: Path) -> List[ToolSpec]:
                 "type": "object",
                 "required": ["query"],
                 "properties": {
+                    "title": {"type": "string", "description": "Short human title (<= 6 words)"},
                     "query": {"type": "string"},
                     "max_hits": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
                 },
@@ -138,4 +207,3 @@ def dispatch_tool(tools: List[ToolSpec], name: str, arguments_json: str) -> Dict
             args = json.loads(arguments_json or "{}")
             return t.func(args)
     return {"error": f"Unknown tool: {name}"}
-

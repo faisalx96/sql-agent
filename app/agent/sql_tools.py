@@ -35,7 +35,12 @@ def make_sql_tools(db: Database) -> List[ToolSpec]:
         ToolSpec(
             name="sql_schema",
             description="Return database schema (tables, columns, types, primary keys, row counts).",
-            schema={"type": "object", "properties": {}},
+            schema={
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Short human title (<= 6 words)", "default": "Inspect schema"}
+                }
+            },
             func=sql_schema,
         ),
         ToolSpec(
@@ -45,8 +50,9 @@ def make_sql_tools(db: Database) -> List[ToolSpec]:
                 "type": "object",
                 "required": ["sql"],
                 "properties": {
+                    "title": {"type": "string", "description": "Short human title (<= 6 words)"},
                     "sql": {"type": "string"},
-                    "params": {"description": "Positional list or named dict parameters"},
+                    "params": {"type": "object", "additionalProperties": {}},
                     "max_rows": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 100},
                 },
             },

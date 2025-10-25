@@ -11,6 +11,7 @@ What’s included
 - Pretty SQL view in the tool panel, plus a compact “Result preview” table for quick inspection.
 - Environment-driven config and a dedicated workspace folder for file operations.
 - Clear extension points to add tools and change the model or system prompt.
+ - Server-side sessions: JSON-backed store under the workspace with APIs to list/get/rename/delete sessions.
 
 Why not Streamlit? This aims for a native-feeling, dependency-light UI that runs anywhere you can start a web server. No ceremony, no extra app shell.
 
@@ -67,6 +68,13 @@ Notes on streaming
   - {"type":"tool_result", "id", "name", "output"}
   - {"chunk":"..."} and {"done":true} for the assistant’s text
 - The UI shows live tool panels (with pretty SQL and JSON I/O), a “Result preview” grid for sql_query, and a live timer.
+
+Session APIs
+- POST /api/new_chat {title?} → {chat_id}
+- GET  /api/sessions → {sessions:[{id,title,created_at,updated_at}]}
+- GET  /api/sessions/{chat_id} → {id,title,created_at,updated_at,messages:[...]}
+- PATCH /api/sessions/{chat_id} {title} → {ok:true}
+- DELETE /api/sessions/{chat_id} → {ok:true}
 
 Security considerations
 - File tools are constrained to WORKSPACE_DIR and reject path traversal. Still, treat this as a dev/POR scaffold, not a production sandbox.
