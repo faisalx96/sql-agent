@@ -96,6 +96,84 @@
         return out.join('\n');
       }
       function renderSQL(sql) { try { const formatted = formatSQL(sql); const highlighted = hljs.highlight(formatted || '', { language: 'sql' }).value; return sanitize(highlighted); } catch (e) { return sanitize(sql || ''); } }
+      // Chart rendering (Chart.js via CDN)
+      function renderFallbackChart(t, labels, data) {
+        try {
+          const id = t._fbId; if (!id) return;
+          const el = document.getElementById(id); if (!el) return;
+          el.innerHTML = '';
+          const max = Math.max(1, ...data.map(v => (typeof v === 'number' ? v : Number(v) || 0)));
+          labels.forEach((lab, i) => {
+            const v = (typeof data[i] === 'number' ? data[i] : Number(data[i]) || 0);
+            const row = document.createElement('div'); row.style.display = 'flex'; row.style.alignItems = 'center'; row.style.gap = '8px'; row.style.margin = '4px 0';
+            const l = document.createElement('div'); l.textContent = String(lab); l.style.width = '160px'; l.style.fontSize = '12px'; l.style.color = '#94a3b8'; l.style.whiteSpace = 'nowrap'; l.style.overflow = 'hidden'; l.style.textOverflow = 'ellipsis';
+            const barWrap = document.createElement('div'); barWrap.style.flex = '1'; barWrap.style.height = '10px'; barWrap.style.background = 'rgba(148, 163, 184, 0.15)'; barWrap.style.border = '1px solid rgba(148,163,184,0.2)'; barWrap.style.borderRadius = '6px';
+            const bar = document.createElement('div'); bar.style.height = '100%'; bar.style.width = `${Math.max(2, (v / max) * 100)}%`; bar.style.background = '#60a5fa'; bar.style.borderRadius = '6px';
+            barWrap.appendChild(bar);
+            const val = document.createElement('div'); val.textContent = String(v); val.style.width = '44px'; val.style.textAlign = 'right'; val.style.fontSize = '12px'; val.style.color = '#cbd5e1';
+            row.appendChild(l); row.appendChild(barWrap); row.appendChild(val);
+            el.appendChild(row);
+          });
+        } catch {}
+      }
+
+      function renderChartForTool(t, retry = 0) {
+        try {
+          if (!t || t.name !== 'display_chart') return;
+          if (typeof Chart === 'undefined') { if (retry < 10) setTimeout(() => renderChartForTool(t, retry+1), 100); return; }
+          try { if (!Chart._sqlAgentRegistered && Chart.register && Chart.registerables) { Chart.register(...Chart.registerables); Chart._sqlAgentRegistered = true; } } catch {}
+          const id = t._chartId; if (!id) return;
+          const canvas = document.getElementById(id);
+          if (!canvas) { if (retry < 10) setTimeout(() => renderChartForTool(t, retry+1), 100); return; }
+          // If hidden (e.g., parent collapsed), retry shortly
+          const isHidden = !canvas.offsetParent || canvas.clientWidth === 0;
+          if (isHidden && retry < 10) { setTimeout(() => renderChartForTool(t, retry+1), 120); return; }
+          const ctx = canvas.getContext('2d');
+          if (!ctx) return;
+          // Destroy prior instance to avoid leaks
+          if (t._chart) { try { t._chart.destroy(); } catch {} t._chart = null; }
+          const spec = t.output || {};
+          const columns = spec.columns || (spec.data && spec.data.columns) || [];
+          const rows = spec.rows || (spec.data && spec.data.rows) || [];
+          if (!Array.isArray(columns) || !Array.isArray(rows) || !rows.length) return;
+          const xName = spec.x || (columns[0] || null);
+          let series = Array.isArray(spec.series) && spec.series.length ? spec.series : (spec.y ? [spec.y] : columns.filter(c => c !== xName).slice(0,3));
+          const type = (spec.type === 'bar') ? 'bar' : 'line';
+          const stacked = !!spec.stacked;
+          const xi = columns.indexOf(xName);
+          if (xi < 0) return;
+          const labels = rows.map(r => r[xi]);
+          const palette = ['#60a5fa','#34d399','#f472b6','#f59e0b','#a78bfa','#22d3ee'];
+          const datasets = [];
+          series.forEach((sname, i) => {
+            const si = columns.indexOf(sname);
+            if (si < 0) return;
+            const color = palette[i % palette.length];
+            const data = rows.map(r => (typeof r[si] === 'number' ? r[si] : Number(r[si]) || 0));
+            const base = { label: sname, data, parsing: false, borderColor: color, backgroundColor: color, borderWidth: 2, pointRadius: 0, tension: 0.2 };
+            if (type === 'line') { base.fill = (spec.type === 'area'); }
+            datasets.push(base);
+          });
+          t._chartStatus = { labels: labels.length, datasets: datasets.length };
+          if (!datasets.length || !labels.length) {
+            // Fallback to simple in-DOM bars using the first series if available
+            const fb = (datasets[0] && datasets[0].data) || [];
+            renderFallbackChart(t, labels, fb);
+            return;
+          }
+          // Ensure the canvas has width/height (Chart.js uses CSS size)
+          canvas.style.height = canvas.style.height || '320px';
+          if (!canvas.style.width || canvas.clientWidth === 0) canvas.style.width = '100%';
+          const options = {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: { x: { type: 'category', stacked }, y: { type: 'linear', stacked, beginAtZero: true } },
+            plugins: { legend: { display: true }, title: { display: !!spec.title, text: spec.title || '' } }
+          };
+          t._chart = new Chart(ctx, { type, data: { labels, datasets }, options });
+          try { if (typeof t._chart.resize === 'function') t._chart.resize(); } catch {}
+        } catch {}
+      }
 
       // Time + duration
       function toolElapsed(t) {
@@ -184,6 +262,7 @@
               }
               if (m.role === 'assistant') {
                 const amsg = { role: 'assistant', content: m.content || '', renderRaw: false };
+                if (m.thinking) { amsg.thinking = m.thinking; amsg.thinkingExpanded = true; }
                 if (pendingTools && pendingTools.length) {
                   amsg.tools = pendingTools.map(t => ({ ...t }));
                   // If we have a result, attach preview (supports sql_query or display_result)
@@ -207,6 +286,18 @@
               out.push(amsg);
             }
             messages.value = out;
+            await nextTick();
+            try {
+              for (const m of messages.value) {
+                for (const t of (m.tools || [])) {
+                  if (t.name === 'display_chart' && t.output) {
+                    t.expanded = true;
+                    t._chartId = t._chartId || ('chart-' + Math.random().toString(36).slice(2,9));
+                    renderChartForTool(t);
+                  }
+                }
+              }
+            } catch {}
           } else {
             messages.value = [];
           }
@@ -278,9 +369,26 @@
                   if (existing) { existing.output = evt.output; existing.end = Date.now(); }
                   else { assistantMsg.tools.push({ id: evt.id, name: evt.name, arguments: undefined, output: evt.output, expanded: false, start: Date.now(), end: Date.now() }); }
                   if ((evt.name === 'display_result' || evt.name === 'sql_query') && evt.output && evt.output.columns && evt.output.rows) { assistantMsg.preview = { columns: evt.output.columns, rows: evt.output.rows, rowcount: evt.output.rowcount }; assistantMsg.previewExpanded = false; }
+                  if (evt.name === 'display_chart') {
+                    const tool = existing || (assistantMsg.tools.find(t => t.id === evt.id));
+                    if (tool) {
+                      tool.expanded = true;
+                      tool._chartId = tool._chartId || ('chart-' + Math.random().toString(36).slice(2,9));
+                      await nextTick();
+                      renderChartForTool(tool);
+                      setTimeout(() => renderChartForTool(tool), 150);
+                      setTimeout(() => renderChartForTool(tool), 500);
+                    }
+                  }
                   await nextTick();
                 } else if (evt.tools) {
                   assistantMsg.tools = evt.tools.map(t => ({ ...t, expanded: false }));
+                  await nextTick();
+                } else if (evt.type === 'thinking' && evt.content != null) {
+                  const add = String(evt.content);
+                  if (assistantMsg.thinking) assistantMsg.thinking += add;
+                  else assistantMsg.thinking = add;
+                  assistantMsg.thinkingExpanded = true;
                   await nextTick();
                 } else if (evt.error) {
                   assistantMsg.content += (assistantMsg.content ? '\n\n' : '') + `_(error: ${String(evt.error)})_`;
@@ -334,6 +442,12 @@
             const parts = []; if (rc != null) parts.push(`${rc} rows`); if (cc != null) parts.push(`${cc} cols`);
             return parts.join(', ') || 'result';
           }
+          if (t.name === 'display_chart' && t.output) {
+            const type = t.output.type || 'line';
+            const x = t.output.x || '';
+            const s = Array.isArray(t.output.series) ? t.output.series.join(', ') : (t.output.y || '');
+            return `${type} ${x}${s ? ' vs ' + s : ''}`.trim();
+          }
           if (t.name === 'sql_schema' && t.output) {
             const tables = Array.isArray(t.output.tables) ? t.output.tables.length : (t.output.tables ? Object.keys(t.output.tables).length : 0);
             return `${tables} tables`;
@@ -345,7 +459,7 @@
         } catch {}
         return 'details';
       }
-      function toggleTool(t) { t.expanded = !t.expanded; }
+      function toggleTool(t) { t.expanded = !t.expanded; if (t.expanded) { nextTick(() => renderChartForTool(t)); } }
 
       // Tool UI: type, filter, bulk expand/collapse, errors, downloads
       function displayTitle(t) {
@@ -417,7 +531,7 @@
 
       function previewRowCount(preview) { if (!preview) return 0; if (preview.rowcount !== undefined && preview.rowcount !== null) return preview.rowcount; if (Array.isArray(preview.rows)) return preview.rows.length; return 0; }
 
-      return { chatId, messages, input, inputEl, streaming, model, allowedModels, sidebarOpen, sessions, loadingSessions, loadingChat, showSettings, settings, toasts, newChat, createChat, selectChat, renameChat, deleteChat, onSubmit, stopStreaming, retryLast, canRetry, copyText, renderMarkdown, renderCode, renderSQL, toolSummary, displayTitle, toggleTool, toolError, copyJSON, copyCSV, downloadCSV, previewRowCount, toolElapsed, formatDuration, turnElapsed, sortedSessions, formatTimeAgo, autosize, saveSettings, toggleRender, applyModel };
+      return { chatId, messages, input, inputEl, streaming, model, allowedModels, sidebarOpen, sessions, loadingSessions, loadingChat, showSettings, settings, toasts, newChat, createChat, selectChat, renameChat, deleteChat, onSubmit, stopStreaming, retryLast, canRetry, copyText, renderMarkdown, renderCode, renderSQL, toolSummary, displayTitle, toggleTool, toolError, copyJSON, copyCSV, downloadCSV, previewRowCount, toolElapsed, formatDuration, turnElapsed, sortedSessions, formatTimeAgo, autosize, saveSettings, toggleRender, applyModel, renderChartForTool };
     }
   }).mount('#app');
 })();

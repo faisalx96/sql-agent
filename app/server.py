@@ -18,6 +18,7 @@ from .agent.core import Agent
 from .agent.tools import make_tools
 from .agent.sql_tools import make_sql_tools
 from .config import Config
+from .tracing import Tracer
 from .db import Database
 from .sessions import SessionStore
 
@@ -57,6 +58,7 @@ agent = Agent(
         "- Keep titles concise, specific, and user-friendly.\n\n"
         "Result previews in UI:\n"
         "- The UI previews sql_query results as a table automatically. Include a reasonable LIMIT (default 100).\n"
+        "- To visualize results, call display_chart with x and series columns (types: line, bar, area) and INCLUDE the data (columns + rows) from your SQL result (<= 500 rows).\n"
         "- Then provide your one-sentence summary as the final assistant message.\n\n"
         "Presentation style (friendly, actionable, concise):\n"
         "- If the question is clear and answerable, DO NOT ask for confirmation — immediately use tools to execute and show results (display_result), then return ONE short, business-friendly summary sentence.\n"
@@ -89,6 +91,18 @@ agent = Agent(
     ),
 )
 
+
+def _safe_json(obj: Any) -> Any:
+    """Parse JSON strings to objects; leave other types as-is.
+    Avoids throwing on invalid JSON, returns original if parsing fails.
+    """
+    try:
+        if isinstance(obj, str):
+            return json.loads(obj)
+    except Exception:
+        return obj
+    return obj
+
 app = FastAPI(title="SQL Agent")
 
 static_dir = Path(__file__).parent / "ui" / "static"
@@ -97,6 +111,9 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 # Session store (file-backed JSON in workspace)
 store = SessionStore(cfg.workspace_dir / "sessions.json")
+
+# Tracing (Langfuse wrapper; gracefully no-ops if unavailable)
+tracer = Tracer.from_config(cfg)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -243,10 +260,78 @@ async def chat(req: Request):
     store.append(chat_id, {"role": "user", "content": str(user_message)}, updated_at=now_ms)
     history = store.get_messages(chat_id)
 
+    # Start trace for this turn
+    turn_id = secrets.token_hex(8)
+    trace = tracer.start_trace(
+        trace_id=turn_id,
+        name="chat-turn",
+        session_id=chat_id,
+        input={"user": str(user_message)},
+        metadata={"route": "/api/chat"},
+    )
+    try:
+        logger.info("trace started: turn_id=%s chat_id=%s", turn_id, chat_id)
+    except Exception:
+        pass
+    trace.event("user_message", {"message": str(user_message)})
+
     async def event_stream():
-        # Iterative tool loop: stream tool calls/results live, then stream final text
+        # Iterative tool loop with true streaming of content + thinking deltas
         try:
+            def extract_thinking_from_message(message: Any) -> str | None:
+                try:
+                    content = getattr(message, "content", None)
+                    if isinstance(content, list):
+                        for blk in content:
+                            btype = blk.get("type") if isinstance(blk, dict) else getattr(blk, "type", None)
+                            if btype in ("reasoning", "thinking"):
+                                txt = (
+                                    blk.get("text") if isinstance(blk, dict) else getattr(blk, "text", None)
+                                ) or (
+                                    blk.get("content") if isinstance(blk, dict) else getattr(blk, "content", None)
+                                )
+                                if txt:
+                                    return str(txt)
+                    reasoning = getattr(message, "reasoning", None)
+                    if reasoning:
+                        if isinstance(reasoning, str):
+                            return reasoning
+                        if isinstance(reasoning, dict):
+                            for key in ("text", "content", "output_text"):
+                                if reasoning.get(key):
+                                    return str(reasoning.get(key))
+                        else:
+                            for key in ("text", "content", "output_text"):
+                                try:
+                                    v = getattr(reasoning, key, None)
+                                    if v:
+                                        return str(v)
+                                except Exception:
+                                    pass
+                except Exception:
+                    pass
+                return None
+
+            def is_stream_unsupported_error(e: Exception) -> bool:
+                try:
+                    # Catch common OpenAI 400 errors for stream unsupported/verification
+                    msg = str(getattr(e, "message", "")) or str(e)
+                    if any(p in msg for p in (
+                        "must be verified to stream this model",
+                        '"param": "stream"',
+                        "'param': 'stream'",
+                        "unsupported_value",
+                    )):
+                        return True
+                    status = getattr(e, "status_code", None)
+                    if status == 400:
+                        return True
+                except Exception:
+                    pass
+                return False
+
             while True:
+                # Prepare tools payload
                 tools_payload = agent.tools and [
                     {
                         "type": "function",
@@ -258,7 +343,7 @@ async def chat(req: Request):
                     }
                     for t in agent.tools
                 ] or None
-                logger.debug("requesting completion with tools=%s", [t.get("function",{}).get("name") for t in (tools_payload or [])])
+
                 # Determine model for this session
                 current_model = agent.model
                 sess_meta = store.get(chat_id)
@@ -267,36 +352,71 @@ async def chat(req: Request):
                     if m:
                         current_model = str(m)
 
-                # Some models (e.g., gpt-5 family) do not accept non-default temperature.
-                create_kwargs: Dict[str, Any] = dict(
+                # Non-streaming request to OpenAI (org-friendly)
+                lower_model = str(current_model).lower()
+                ns_kwargs: Dict[str, Any] = dict(
                     model=current_model,
                     messages=agent.build_messages(history),
                     tools=tools_payload,
                     tool_choice="auto" if agent.tools else None,
                 )
-                if not str(current_model).lower().startswith("gpt-5"):
-                    create_kwargs["temperature"] = 0.2
-                resp = agent.client.chat.completions.create(**create_kwargs)
+                if not lower_model.startswith("gpt-5"):
+                    ns_kwargs["temperature"] = 0.2
 
+                llm_start = int(time.time() * 1000)
+                resp = agent.client.chat.completions.create(**ns_kwargs)
+                llm_end = int(time.time() * 1000)
                 choice = resp.choices[0]
                 msg = choice.message
+                thinking_text = extract_thinking_from_message(msg) or ""
+                if thinking_text:
+                    yield orjson.dumps({"type": "thinking", "content": thinking_text}).decode() + "\n"
+
+                # Record LLM generation
+                usage_dict: Dict[str, Any] | None = None
+                try:
+                    u = getattr(resp, "usage", None)
+                    if u:
+                        # Compatible with both dict-like and object-like usage
+                        usage_dict = {
+                            k: getattr(u, k)
+                            for k in ("prompt_tokens", "completion_tokens", "total_tokens")
+                            if getattr(u, k, None) is not None
+                        }
+                except Exception:
+                    usage_dict = None
+                try:
+                    trace.generation(
+                        name="assistant",
+                        model=current_model,
+                        input=None,
+                        output=getattr(msg, "content", None),
+                        start_ms=llm_start,
+                        end_ms=llm_end,
+                        usage=usage_dict,
+                        metadata={"thinking": thinking_text or None},
+                    )
+                except Exception:
+                    pass
+
                 if msg.tool_calls:
-                    # Emit tool_call events for visibility
+                    # Persist + emit tool calls
                     tool_call_msg = {
                         "role": "assistant",
                         "tool_calls": [tc.model_dump() for tc in msg.tool_calls],
                         "content": msg.content,
+                        "thinking": (thinking_text or None),
                     }
                     store.append(chat_id, tool_call_msg, updated_at=int(time.time() * 1000))
                     history.append(tool_call_msg)
 
                     for tc in msg.tool_calls or []:
-                        # Send tool_call event
                         args_raw = tc.function.arguments
                         try:
                             args = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
                         except Exception:
                             args = args_raw
+                        # Send tool_call event
                         yield orjson.dumps({
                             "type": "tool_call",
                             "id": tc.id,
@@ -304,28 +424,56 @@ async def chat(req: Request):
                             "arguments": args,
                         }).decode() + "\n"
 
-                        # Execute the tool
                         from .agent.tools import dispatch_tool
-
                         # Guard: encourage schema-first workflow
                         try:
                             if tc.function.name == "sql_query":
-                                has_schema = any(
-                                    (m.get("role") == "tool" and m.get("name") == "sql_schema")
-                                    for m in history
-                                )
+                                has_schema = any((m.get("role") == "tool" and m.get("name") == "sql_schema") for m in history)
                                 if not has_schema:
-                                    result = {
-                                        "error": "schema_required",
-                                        "message": "Call sql_schema first to confirm available tables/columns and then re-issue sql_query.",
-                                    }
+                                    result = {"error": "schema_required", "message": "Call sql_schema first to confirm available tables/columns and then re-issue sql_query."}
                                 else:
+                                    t_start = int(time.time() * 1000)
                                     result = dispatch_tool(agent.tools, tc.function.name, tc.function.arguments)
+                                    t_end = int(time.time() * 1000)
+                                    # Trace SQL tool
+                                    try:
+                                        args_json = tc.function.arguments
+                                        trace.span(
+                                            name=f"tool:{tc.function.name}",
+                                            input=_safe_json(args_json),
+                                            output=_safe_json(result),
+                                            start_ms=t_start,
+                                            end_ms=t_end,
+                                        )
+                                    except Exception:
+                                        pass
                             else:
+                                t_start = int(time.time() * 1000)
                                 result = dispatch_tool(agent.tools, tc.function.name, tc.function.arguments)
+                                t_end = int(time.time() * 1000)
+                                try:
+                                    args_json = tc.function.arguments
+                                    trace.span(
+                                        name=f"tool:{tc.function.name}",
+                                        input=_safe_json(args_json),
+                                        output=_safe_json(result),
+                                        start_ms=t_start,
+                                        end_ms=t_end,
+                                    )
+                                except Exception:
+                                    pass
                         except Exception as e:
                             logger.exception("tool execution failed: %s", tc.function.name)
                             result = {"error": "tool_exception", "message": str(e)}
+                            try:
+                                trace.span(
+                                    name=f"tool:{tc.function.name}",
+                                    input=_safe_json(tc.function.arguments),
+                                    output={"error": str(e)},
+                                    metadata={"status": "error"},
+                                )
+                            except Exception:
+                                pass
 
                         tool_msg = {
                             "role": "tool",
@@ -336,30 +484,109 @@ async def chat(req: Request):
                         store.append(chat_id, tool_msg, updated_at=int(time.time() * 1000))
                         history.append(tool_msg)
 
-                        # Send tool_result event
                         yield orjson.dumps({
                             "type": "tool_result",
                             "id": tc.id,
                             "name": tc.function.name,
                             "output": result,
                         }).decode() + "\n"
-
-                    # After processing tools, continue conversation loop
+                    # Next assistant turn
                     continue
 
-                # Final assistant response; stream text in chunks
+                # Final answer path (chunked to the UI but not streamed from provider)
                 content = msg.content or ""
                 duration_ms = int(time.time() * 1000) - turn_start
-                final_msg = {"role": "assistant", "content": content, "duration_ms": duration_ms}
+                final_msg = {"role": "assistant", "content": content, "duration_ms": duration_ms, "thinking": (thinking_text or None)}
                 store.append(chat_id, final_msg, updated_at=int(time.time() * 1000))
                 history.append(final_msg)
 
-                # Stream content in character chunks, preserving whitespace/newlines for Markdown formatting
+                # Chunk out content to emulate streaming UX
                 step = 300
                 for i in range(0, len(content), step):
                     part = content[i : i + step]
                     yield orjson.dumps({"chunk": part}).decode() + "\n"
                     await asyncio.sleep(0.005)
+                yield orjson.dumps({"done": True}).decode() + "\n"
+                try:
+                    trace.event("turn_done", {"duration_ms": duration_ms})
+                except Exception:
+                    pass
+                return
+
+                # After stream closes, decide next step
+                duration_ms = int(time.time() * 1000) - turn_start
+
+                if tool_calls_state and (finish_reason in ("tool_calls", "tool", "function_call")):
+                    # Persist assistant intermediate with tool calls + any thinking
+                    tool_calls_list = []
+                    for idx, st in sorted(tool_calls_state.items()):
+                        tool_calls_list.append({
+                            "id": st.get("id") or f"call_{idx}",
+                            "type": "function",
+                            "function": {
+                                "name": st.get("name") or "",
+                                "arguments": st.get("arguments") or "",
+                            },
+                        })
+                    import time as _t
+                    tool_call_msg = {
+                        "role": "assistant",
+                        "tool_calls": tool_calls_list,
+                        "content": assistant_text,
+                        "thinking": thinking_text or None,
+                    }
+                    store.append(chat_id, tool_call_msg, updated_at=int(_t.time() * 1000))
+                    history.append(tool_call_msg)
+
+                    # Execute each tool and emit results
+                    from .agent.tools import dispatch_tool
+
+                    for tc in tool_calls_list:
+                        try:
+                            fname = tc["function"]["name"]
+                            fargs = tc["function"]["arguments"]
+                            # Guard: encourage schema-first workflow
+                            if fname == "sql_query":
+                                has_schema = any((m.get("role") == "tool" and m.get("name") == "sql_schema") for m in history)
+                                if not has_schema:
+                                    result = {"error": "schema_required", "message": "Call sql_schema first to confirm available tables/columns and then re-issue sql_query."}
+                                else:
+                                    result = dispatch_tool(agent.tools, fname, fargs)
+                            else:
+                                result = dispatch_tool(agent.tools, fname, fargs)
+                        except Exception as e:
+                            logger.exception("tool execution failed: %s", tc)
+                            result = {"error": "tool_exception", "message": str(e)}
+
+                        tool_msg = {
+                            "role": "tool",
+                            "tool_call_id": tc.get("id"),
+                            "name": tc["function"]["name"],
+                            "content": json.dumps(result),
+                        }
+                        store.append(chat_id, tool_msg, updated_at=int(time.time() * 1000))
+                        history.append(tool_msg)
+
+                        # Send tool_result event
+                        yield orjson.dumps({
+                            "type": "tool_result",
+                            "id": tc.get("id"),
+                            "name": tc["function"]["name"],
+                            "output": result,
+                        }).decode() + "\n"
+
+                    # Continue outer loop for next assistant turn
+                    continue
+
+                # Otherwise, final assistant message
+                final_msg = {
+                    "role": "assistant",
+                    "content": assistant_text,
+                    "duration_ms": duration_ms,
+                    "thinking": thinking_text or None,
+                }
+                store.append(chat_id, final_msg, updated_at=int(time.time() * 1000))
+                history.append(final_msg)
                 yield orjson.dumps({"done": True}).decode() + "\n"
                 break
         except Exception as e:
@@ -368,6 +595,16 @@ async def chat(req: Request):
                 yield orjson.dumps({"type": "error", "error": str(e)}).decode() + "\n"
             except Exception:
                 # best effort
+                pass
+        finally:
+            try:
+                trace.event("turn_close", None)
+            except Exception:
+                pass
+            # Ensure traces are flushed to Langfuse backend
+            try:
+                tracer.flush()
+            except Exception:
                 pass
 
     return StreamingResponse(event_stream(), media_type="application/x-ndjson")

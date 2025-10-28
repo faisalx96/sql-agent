@@ -108,6 +108,90 @@ def make_tools(workspace: Path) -> List[ToolSpec]:
                     break
         return {"query": query, "hits": hits}
 
+    def display_chart(args: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize a simple chart spec so the UI can render it.
+
+        Accepts either top-level columns/rows or nested data: {columns, rows}.
+        Required: x (column name for labels). Use `y` for a single series or `series` for multiple.
+        """
+        title = str(args.get("title") or "").strip()
+        ctype = str(args.get("type") or "line").lower()
+        if ctype not in ("line", "bar", "area"):
+            ctype = "line"
+
+        # Data
+        data = args.get("data") or {}
+        columns = args.get("columns") or data.get("columns") or []
+        rows = args.get("rows") or data.get("rows") or []
+        if not isinstance(columns, list):
+            columns = []
+        if not isinstance(rows, list):
+            rows = []
+        # If rows are dicts, infer/normalize to arrays using column order
+        if rows and isinstance(rows[0], dict):
+            if not columns:
+                # Infer columns from first row, then add any new keys encountered later
+                col_order = list(rows[0].keys())
+                seen = set(col_order)
+                for r in rows:
+                    if isinstance(r, dict):
+                        for k in r.keys():
+                            if k not in seen:
+                                col_order.append(k)
+                                seen.add(k)
+                columns = col_order
+            conv = []
+            for r in rows:
+                if isinstance(r, dict):
+                    conv.append([r.get(c) for c in columns])
+                else:
+                    conv.append(r)
+            rows = conv
+
+        # Truncate to keep payload manageable
+        try:
+            max_rows = int(args.get("max_rows") or 500)
+        except Exception:
+            max_rows = 500
+        truncated = False
+        if len(rows) > max_rows:
+            rows = rows[: max_rows]
+            truncated = True
+
+        # Axis + series
+        # Resolve column names case-insensitively when needed
+        def _resolve(col: str) -> str:
+            if not col or not columns:
+                return col
+            for c in columns:
+                if str(c).lower() == str(col).lower():
+                    return c
+            return col
+
+        x = _resolve(str(args.get("x") or (columns[0] if columns else "")).strip())
+        y = args.get("y")
+        series = args.get("series")
+        if y and not series:
+            series = [y]
+        if not isinstance(series, list) or not series:
+            # Fallback: use up to 3 non-x columns
+            series = [c for c in columns if c != x][:3]
+        # Normalize series names case-insensitively
+        series = [_resolve(str(s)) for s in series]
+
+        stacked = bool(args.get("stacked") or False)
+
+        return {
+            "title": title,
+            "type": ctype,
+            "x": x,
+            "series": series,
+            "columns": columns,
+            "rows": rows,
+            "stacked": stacked,
+            "truncated": truncated,
+        }
+
     return [
         # Note: display_result kept available in module but not exposed by default to the model
         # ToolSpec(
@@ -182,6 +266,34 @@ def make_tools(workspace: Path) -> List[ToolSpec]:
                 },
             },
             func=search_files,
+        ),
+        ToolSpec(
+            name="display_chart",
+            description=(
+                "Render a simple chart in the UI from tabular data. "
+                "Provide x (label column) and either y (single series) or series (array of column names). "
+                "Supported types: line, bar, area. Include columns and rows (or data: {columns, rows}). Max 500 rows."
+            ),
+            schema={
+                "type": "object",
+                "required": ["x"],
+                "properties": {
+                    "title": {"type": "string", "description": "Short human title (<= 6 words)"},
+                    "type": {"type": "string", "enum": ["line", "bar", "area"], "default": "line"},
+                    "x": {"type": "string", "description": "Column name for x-axis labels"},
+                    "y": {"type": "string", "description": "Single series column (alternative to series)"},
+                    "series": {"type": "array", "items": {"type": "string"}, "description": "Series columns"},
+                    "stacked": {"type": "boolean", "default": False},
+                    "columns": {"type": "array", "items": {"type": "string"}},
+                    "rows": {"type": "array", "items": {"type": "array", "items": {} }},
+                    "data": {"type": "object", "properties": {
+                        "columns": {"type": "array", "items": {"type": "string"}},
+                        "rows": {"type": "array", "items": {"type": "array", "items": {} }},
+                    }},
+                    "max_rows": {"type": "integer", "minimum": 1, "maximum": 2000, "default": 500},
+                },
+            },
+            func=display_chart,
         ),
     ]
 

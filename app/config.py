@@ -16,6 +16,11 @@ class Config:
     app_port: int
     workspace_dir: Path
     database_url: str
+    # Langfuse tracing
+    langfuse_public_key: str | None
+    langfuse_secret_key: str | None
+    langfuse_host: str | None
+    tracing_enabled: bool
 
     @staticmethod
     def load() -> "Config":
@@ -36,6 +41,12 @@ class Config:
         default_db = f"sqlite:///{(workspace / 'agent.db').resolve()}"
         db_url = os.getenv("DATABASE_URL", default_db)
 
+        # Langfuse config
+        lf_pub = os.getenv("LANGFUSE_PUBLIC_KEY") or None
+        lf_sec = os.getenv("LANGFUSE_SECRET_KEY") or None
+        lf_host = os.getenv("LANGFUSE_HOST") or None
+        tracing_on = bool(os.getenv("TRACING_ENABLED", "1").strip() != "0")
+
         return Config(
             openai_api_key=api_key,
             openai_base_url=base_url,
@@ -44,4 +55,8 @@ class Config:
             app_port=port,
             workspace_dir=workspace,
             database_url=db_url,
+            langfuse_public_key=lf_pub,
+            langfuse_secret_key=lf_sec,
+            langfuse_host=lf_host,
+            tracing_enabled=tracing_on,
         )

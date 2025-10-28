@@ -12,6 +12,7 @@
     <script>
       tailwind.config = { theme: { extend: {} } };
     </script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   </head>
   <body class="bg-slate-950 text-slate-100">
     <div id="app" v-cloak class="h-dvh max-w-7xl mx-auto px-3 py-4 flex gap-3">
@@ -148,6 +149,16 @@
                 </button>
               </div>
             </div>
+            <div v-if="m.role==='assistant' && m.thinking" class="mb-2 rounded-md border border-slate-800 bg-slate-900/60">
+              <div class="px-3 py-2 text-xs flex items-center justify-between gap-2 border-b border-slate-800">
+                <span class="text-slate-400">Thinking</span>
+                <div class="flex items-center gap-2">
+                  <button @click="copyText(m.thinking)" class="text-xs text-slate-400 hover:text-slate-200">Copy</button>
+                  <button @click="m.thinkingExpanded = !m.thinkingExpanded" class="text-xs text-slate-400 hover:text-slate-200">{{ m.thinkingExpanded ? 'Hide' : 'Show' }}</button>
+                </div>
+              </div>
+              <div v-show="m.thinkingExpanded" class="p-3 text-xs whitespace-pre-wrap text-slate-300">{{ m.thinking }}</div>
+            </div>
             <div v-if="m.role==='assistant' && m.tools && m.tools.length" class="mb-3 space-y-2">
               <div v-for="(t, i) in m.tools" :key="i" class="rounded-md border border-slate-700 bg-slate-900/60 overflow-hidden">
                 <div class="px-3 py-2 text-xs flex items-center justify-between gap-2 border-b border-slate-800">
@@ -237,6 +248,30 @@
                         </div>
                       </div>
                       <pre class="text-xs overflow-auto"><code class="language-json" v-html="renderCode(t.output)"></code></pre>
+                    </div>
+                  </template>
+                  <!-- Display Chart: render a canvas chart from spec -->
+                  <template v-if="t.name==='display_chart'">
+                    <div class="sm:col-span-2">
+                      <div class="flex items-center justify-between mb-1">
+                        <div class="text-xs text-slate-400">Chart</div>
+                        <div class="flex items-center gap-2">
+                          <button @click="copyJSON(t.output)" class="text-xs text-slate-400 hover:text-slate-200 inline-flex items-center gap-1 transition-colors">
+                            <svg class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                            Copy spec
+                          </button>
+                          <button @click="renderChartForTool(t)" class="text-xs text-slate-400 hover:text-slate-200">Refresh</button>
+                        </div>
+                      </div>
+                      <div class="rounded-md border border-slate-800 bg-slate-950/60 p-2">
+                        <template v-if="t.output && t.output.columns && t.output.rows && t.output.rows.length">
+                          <canvas :id="t._chartId || (t._chartId = 'chart-'+Math.random().toString(36).slice(2,9))" style="height:320px; width:100%"></canvas>
+                        </template>
+                        <div v-else class="text-[12px] text-slate-400">No data provided to chart. Pass columns and rows.</div>
+                        <div :id="t._fbId || (t._fbId = 'chartfb-'+Math.random().toString(36).slice(2,9))" class="mt-2"></div>
+                        <div v-if="t._chartStatus" class="mt-1 text-[11px] text-slate-500">labels: {{ t._chartStatus.labels }}, series: {{ t._chartStatus.datasets }}</div>
+                      </div>
+                      <div v-if="t.output && t.output.truncated" class="mt-1 text-[11px] text-slate-500">Data truncated for performance</div>
                     </div>
                   </template>
                 </div>
