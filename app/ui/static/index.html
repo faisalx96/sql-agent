@@ -196,7 +196,7 @@
                       </div>
                       <pre class="text-xs overflow-auto"><code class="language-sql" v-html="renderSQL(t.arguments.sql)"></code></pre>
                     </div>
-                    <div v-if="t.output && t.output.columns && t.output.rows" class="sm:col-span-2 rounded-md border border-slate-700 overflow-hidden">
+                    <div v-if="false && t.output && t.output.columns && t.output.rows" class="sm:col-span-2 rounded-md border border-slate-700 overflow-hidden">
                       <div class="px-3 py-2 text-xs flex items-center justify-between gap-2 bg-slate-900/60 border-b border-slate-800">
                         <div class="text-slate-300">Query result <span class="text-slate-400">— {{ t.output.rowcount ?? (t.output.rows.length) }} rows</span></div>
                         <div class="flex items-center gap-2">
@@ -268,8 +268,6 @@
                           <canvas :id="t._chartId || (t._chartId = 'chart-'+Math.random().toString(36).slice(2,9))" style="height:320px; width:100%"></canvas>
                         </template>
                         <div v-else class="text-[12px] text-slate-400">No data provided to chart. Pass columns and rows.</div>
-                        <div :id="t._fbId || (t._fbId = 'chartfb-'+Math.random().toString(36).slice(2,9))" class="mt-2"></div>
-                        <div v-if="t._chartStatus" class="mt-1 text-[11px] text-slate-500">labels: {{ t._chartStatus.labels }}, series: {{ t._chartStatus.datasets }}</div>
                       </div>
                       <div v-if="t.output && t.output.truncated" class="mt-1 text-[11px] text-slate-500">Data truncated for performance</div>
                     </div>
@@ -277,7 +275,7 @@
                 </div>
               </div>
             </div>
-            <div v-if="m.role==='assistant' && m.preview && m.preview.columns && m.preview.rows" class="mb-3 rounded-md border border-slate-700 overflow-hidden">
+            <div v-if="false && m.role==='assistant' && m.preview && m.preview.columns && m.preview.rows" class="mb-3 rounded-md border border-slate-700 overflow-hidden">
                 <div class="px-3 py-2 text-xs flex items-center justify-between gap-2 bg-slate-900/60 border-b border-slate-800">
                   <div class="text-slate-300">
                     Result preview <span class="text-slate-400">— {{ previewRowCount(m.preview) }} rows</span>
@@ -309,7 +307,7 @@
                   </table>
                 </div>
               </div>
-            <div v-if="m.role==='assistant'" class="prose prose-invert max-w-none" v-html="renderMarkdown(m.content)"></div>
+            <div v-if="m.role==='assistant'" :id="'msg-content-'+idx" class="prose prose-invert max-w-none message-content" v-html="renderMarkdown(m.content)"></div>
             <div v-else class="whitespace-pre-wrap">{{ m.content }}</div>
             </div>
           </div>

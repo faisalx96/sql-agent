@@ -58,14 +58,25 @@ agent = Agent(
         "- Keep titles concise, specific, and user-friendly.\n\n"
         "Result previews in UI:\n"
         "- The UI previews sql_query results as a table automatically. Include a reasonable LIMIT (default 100).\n"
-        "- To visualize results, call display_chart with x and series columns (types: line, bar, area) and INCLUDE the data (columns + rows) from your SQL result (<= 500 rows).\n"
+        "Visualization policy (executive audience):\n"
+        "- When your answer includes a trend, ranking, breakdown, or numeric comparison, ALWAYS embed one or more inline charts in your final assistant message.\n"
+        "- Use fenced code blocks with language 'chart' that contain the chart spec and the chart data (columns + rows).\n"
+        "- If you called display_chart or produced chartable data with sql_query, you MUST also include matching inline chart blocks in your final message (same x/series and the data you used).\n"
+        "- Chart types and defaults: line for time series, bar for rankings/breakdowns, area for share-of-total or stacked series.\n"
+        "- Keep charts focused: 1–3 charts per reply, <= 500 rows per chart; include short, human titles.\n"
+        "- Use x + y for single-series or x + series for multi-series.\n"
+        "- Do NOT include code blocks other than chart blocks, and never include Markdown tables in the final message.\n"
+        "- Self-check before you answer: If your reply contains numeric comparisons or you used display_chart/sql_query for aggregates, make sure your final text includes at least one ```chart block in-line. If not, add it.\n"
+        "- Example inline chart block:\n"
+        "\n```chart\n{\\n  \"title\": \"Title\", \"type\": \"bar|line|area\", \"x\": \"label_col\", \"y\": \"value_col\", \"columns\": [..], \"rows\": [..]\\n}\n```\n\n"
+        "(The UI renders these blocks inline, in place.)\n"
         "- Then provide your one-sentence summary as the final assistant message.\n\n"
         "Presentation style (friendly, actionable, concise):\n"
         "- If the question is clear and answerable, DO NOT ask for confirmation — immediately use tools to execute and show results (display_result), then return ONE short, business-friendly summary sentence.\n"
         "- If the question is ambiguous or missing key parameters, ask 1–3 short, direct clarifying questions. Only ask confirmation when you must choose between multiple equally reasonable paths.\n"
         "- Offer 2–4 concise suggestions or next steps when helpful (one line each).\n"
         "- Avoid technical terms and schema/column names; use everyday business wording.\n"
-        "- Do NOT include tables or code blocks unless the user explicitly asks.\n"
+        "- Avoid code blocks except for chart blocks as described above. Do NOT include tables or other code blocks unless the user explicitly asks.\n"
         "- Use light Markdown to tidy text: short headings when helpful, and **bold** for key phrases.\n"
         "  Bullets are allowed only for clarifying questions or next-step suggestions (never for numeric results). Avoid code blocks and tables unless asked.\n"
         "- Never output Markdown pipe tables.\n"
@@ -546,23 +557,30 @@ async def chat(req: Request):
                             fname = tc["function"]["name"]
                             fargs = tc["function"]["arguments"]
                             # Guard: encourage schema-first workflow
+                            start_ms = int(time.time() * 1000)
                             if fname == "sql_query":
                                 has_schema = any((m.get("role") == "tool" and m.get("name") == "sql_schema") for m in history)
                                 if not has_schema:
                                     result = {"error": "schema_required", "message": "Call sql_schema first to confirm available tables/columns and then re-issue sql_query."}
+                                    end_ms = int(time.time() * 1000)
                                 else:
                                     result = dispatch_tool(agent.tools, fname, fargs)
+                                    end_ms = int(time.time() * 1000)
                             else:
                                 result = dispatch_tool(agent.tools, fname, fargs)
+                                end_ms = int(time.time() * 1000)
                         except Exception as e:
                             logger.exception("tool execution failed: %s", tc)
                             result = {"error": "tool_exception", "message": str(e)}
+                            end_ms = int(time.time() * 1000)
 
                         tool_msg = {
                             "role": "tool",
                             "tool_call_id": tc.get("id"),
                             "name": tc["function"]["name"],
                             "content": json.dumps(result),
+                            "start_ms": start_ms,
+                            "end_ms": end_ms,
                         }
                         store.append(chat_id, tool_msg, updated_at=int(time.time() * 1000))
                         history.append(tool_msg)
@@ -573,7 +591,11 @@ async def chat(req: Request):
                             "id": tc.get("id"),
                             "name": tc["function"]["name"],
                             "output": result,
+                            "start_ms": start_ms,
+                            "end_ms": end_ms,
+                            "duration_ms": (end_ms - start_ms) if (end_ms and start_ms) else None,
                         }).decode() + "\n"
+
 
                     # Continue outer loop for next assistant turn
                     continue

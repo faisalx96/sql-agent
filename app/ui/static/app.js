@@ -96,82 +96,165 @@
         return out.join('\n');
       }
       function renderSQL(sql) { try { const formatted = formatSQL(sql); const highlighted = hljs.highlight(formatted || '', { language: 'sql' }).value; return sanitize(highlighted); } catch (e) { return sanitize(sql || ''); } }
-      // Chart rendering (Chart.js via CDN)
-      function renderFallbackChart(t, labels, data) {
+
+      // Inline charts in assistant Markdown via ```chart code blocks
+      const inlineCharts = {};
+      function ensureChartRegistered() { try { if (typeof Chart !== 'undefined' && Chart.register && Chart.registerables && !Chart._sqlAgentRegistered) { Chart.register(...Chart.registerables); Chart._sqlAgentRegistered = true; } } catch {} }
+      function buildDatasetsFromSpec(spec) {
+        const columns = spec.columns || (spec.data && spec.data.columns) || [];
+        const rows = spec.rows || (spec.data && spec.data.rows) || [];
+        if (!Array.isArray(columns) || !Array.isArray(rows) || !rows.length) return null;
+        const xName = spec.x || (columns[0] || null);
+        const rawType = String(spec.type || 'line').toLowerCase();
+        const t = (rawType === 'area') ? 'line' : (rawType === 'bar_horizontal' || rawType === 'bar-horizontal' || rawType === 'horizontal-bar') ? 'bar' : rawType;
+        const isScatter = (t === 'scatter');
+        const isPie = (t === 'pie');
+        const isDoughnut = (t === 'doughnut');
+        const xi = columns.indexOf(xName); if (xi < 0 && !isScatter) return null;
+        const labels = isScatter ? [] : rows.map(r => r[xi]);
+        const palette = ['#60a5fa','#34d399','#f472b6','#f59e0b','#a78bfa','#22d3ee'];
+        let datasets;
+        if (isScatter) {
+          const yName = spec.y || (columns.find(c => c !== xName) || null);
+          const yi = columns.indexOf(yName); if (yi < 0) return null;
+          const color = palette[0];
+          const data = rows.map(r => ({ x: Number(r[xi]) || 0, y: Number(r[yi]) || 0 }));
+          datasets = [{ label: yName || 'series', data, borderColor: color, backgroundColor: color + '88' }];
+        } else if (isPie || isDoughnut) {
+          const yName = spec.y || (columns.find(c => c !== xName) || null);
+          const yi = columns.indexOf(yName); if (yi < 0) return null;
+          const data = rows.map(r => (typeof r[yi] === 'number' ? r[yi] : Number(r[yi]) || 0));
+          datasets = [{ label: yName || 'value', data, backgroundColor: labels.map((_, i) => palette[i % palette.length]) }];
+        } else {
+          const series = Array.isArray(spec.series) && spec.series.length ? spec.series : (spec.y ? [spec.y] : columns.filter(c => c !== xName).slice(0,3));
+          datasets = series.map((sname, i) => {
+            const si = columns.indexOf(sname); if (si < 0) return null;
+            const color = palette[i % palette.length];
+            const data = rows.map(r => (typeof r[si] === 'number' ? r[si] : Number(r[si]) || 0));
+            const base = { label: sname, data, borderColor: color, backgroundColor: color + '88', borderWidth: 2, pointRadius: 0, tension: 0.2 };
+            if (rawType === 'area') base.fill = true;
+            return base;
+          }).filter(Boolean);
+        }
+        if (!datasets || !datasets.length) return null;
+        const options = {};
+        if (rawType === 'bar_horizontal' || rawType === 'bar-horizontal' || rawType === 'horizontal-bar') options.indexAxis = 'y';
+        return { labels, datasets, type: (t || 'line'), stacked: !!spec.stacked, title: spec.title || '', options };
+      }
+      function isChartSpec(obj) {
         try {
-          const id = t._fbId; if (!id) return;
-          const el = document.getElementById(id); if (!el) return;
-          el.innerHTML = '';
-          const max = Math.max(1, ...data.map(v => (typeof v === 'number' ? v : Number(v) || 0)));
-          labels.forEach((lab, i) => {
-            const v = (typeof data[i] === 'number' ? data[i] : Number(data[i]) || 0);
-            const row = document.createElement('div'); row.style.display = 'flex'; row.style.alignItems = 'center'; row.style.gap = '8px'; row.style.margin = '4px 0';
-            const l = document.createElement('div'); l.textContent = String(lab); l.style.width = '160px'; l.style.fontSize = '12px'; l.style.color = '#94a3b8'; l.style.whiteSpace = 'nowrap'; l.style.overflow = 'hidden'; l.style.textOverflow = 'ellipsis';
-            const barWrap = document.createElement('div'); barWrap.style.flex = '1'; barWrap.style.height = '10px'; barWrap.style.background = 'rgba(148, 163, 184, 0.15)'; barWrap.style.border = '1px solid rgba(148,163,184,0.2)'; barWrap.style.borderRadius = '6px';
-            const bar = document.createElement('div'); bar.style.height = '100%'; bar.style.width = `${Math.max(2, (v / max) * 100)}%`; bar.style.background = '#60a5fa'; bar.style.borderRadius = '6px';
-            barWrap.appendChild(bar);
-            const val = document.createElement('div'); val.textContent = String(v); val.style.width = '44px'; val.style.textAlign = 'right'; val.style.fontSize = '12px'; val.style.color = '#cbd5e1';
-            row.appendChild(l); row.appendChild(barWrap); row.appendChild(val);
-            el.appendChild(row);
+          if (!obj || typeof obj !== 'object') return false;
+          const cols = obj.columns || (obj.data && obj.data.columns);
+          const rows = obj.rows || (obj.data && obj.data.rows);
+          if (!Array.isArray(cols) || !Array.isArray(rows) || rows.length === 0) return false;
+          // Require an axis hint
+          if (!obj.x && !obj.y && !(Array.isArray(obj.series) && obj.series.length)) return false;
+          // Heuristics to avoid false positives
+          if (cols.length > 64) return false;
+          if (rows.length > 2000) return false;
+          return true;
+        } catch { return false; }
+      }
+      function renderInlineChartsForMessage(idx, attempt = 0) {
+        try {
+          // If Chart isn't ready yet, retry shortly (initial page load)
+          if (typeof Chart === 'undefined') { if (attempt < 5) setTimeout(() => renderInlineChartsForMessage(idx, attempt+1), 80); return; }
+          ensureChartRegistered();
+          const root = document.getElementById('msg-content-' + idx);
+          if (!root) return;
+          const blocks = root.querySelectorAll('pre code');
+          blocks.forEach((codeEl, i) => {
+            const pre = codeEl.parentElement;
+            if (!pre || pre.dataset.chartRendered) return;
+            const lang = (codeEl.className || '').toString();
+            const raw = codeEl.textContent || '';
+            let spec = null;
+            // Prefer explicit ```chart blocks, but also accept JSON that looks like a chart spec
+            if (/\blanguage-chart\b/.test(lang)) {
+              try { spec = JSON.parse(raw); } catch { spec = null; }
+            } else if (/\blanguage-json\b/.test(lang) || !lang) {
+              try { const parsed = JSON.parse(raw); if (isChartSpec(parsed)) spec = parsed; } catch { spec = null; }
+            }
+            if (!spec) return;
+            const ds = buildDatasetsFromSpec(spec); if (!ds) return;
+            const canvas = document.createElement('canvas');
+            const cid = 'mc-' + idx + '-' + i + '-' + Math.random().toString(36).slice(2,6);
+            canvas.id = cid; canvas.style.width = '100%'; canvas.style.height = '280px';
+            const wrap = document.createElement('div'); wrap.className = 'my-2'; wrap.appendChild(canvas);
+            pre.replaceWith(wrap);
+            wrap.dataset.chartRendered = '1';
+            const ctx = canvas.getContext('2d'); if (!ctx || typeof Chart === 'undefined') return;
+            try { if (inlineCharts[cid]) { try { inlineCharts[cid].destroy(); } catch {} } } catch {}
+            const options = { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: true }, title: { display: !!ds.title, text: ds.title } } };
+            if (ds.type === 'pie' || ds.type === 'doughnut') {
+              // no scales
+            } else if (ds.type === 'scatter') {
+              options.scales = { x: { type: 'linear', beginAtZero: true }, y: { type: 'linear', beginAtZero: true } };
+            } else {
+              options.scales = { x: { stacked: ds.stacked }, y: { stacked: ds.stacked, beginAtZero: true } };
+            }
+            if (ds.options && ds.options.indexAxis) { options.indexAxis = ds.options.indexAxis; }
+            const chart = new Chart(ctx, { type: ds.type, data: { labels: ds.labels, datasets: ds.datasets }, options });
+            inlineCharts[cid] = chart;
           });
         } catch {}
       }
-
-      function renderChartForTool(t, retry = 0) {
+      // Chart rendering (Chart.js via CDN)
+      function renderChartForTool(t) {
         try {
           if (!t || t.name !== 'display_chart') return;
-          if (typeof Chart === 'undefined') { if (retry < 10) setTimeout(() => renderChartForTool(t, retry+1), 100); return; }
+          if (!t.expanded) return; // render only when visible
+          if (typeof Chart === 'undefined') return;
           try { if (!Chart._sqlAgentRegistered && Chart.register && Chart.registerables) { Chart.register(...Chart.registerables); Chart._sqlAgentRegistered = true; } } catch {}
           const id = t._chartId; if (!id) return;
           const canvas = document.getElementById(id);
-          if (!canvas) { if (retry < 10) setTimeout(() => renderChartForTool(t, retry+1), 100); return; }
-          // If hidden (e.g., parent collapsed), retry shortly
-          const isHidden = !canvas.offsetParent || canvas.clientWidth === 0;
-          if (isHidden && retry < 10) { setTimeout(() => renderChartForTool(t, retry+1), 120); return; }
-          const ctx = canvas.getContext('2d');
-          if (!ctx) return;
-          // Destroy prior instance to avoid leaks
+          if (!canvas) return;
+          const ctx = canvas.getContext('2d'); if (!ctx) return;
           if (t._chart) { try { t._chart.destroy(); } catch {} t._chart = null; }
           const spec = t.output || {};
           const columns = spec.columns || (spec.data && spec.data.columns) || [];
           const rows = spec.rows || (spec.data && spec.data.rows) || [];
           if (!Array.isArray(columns) || !Array.isArray(rows) || !rows.length) return;
           const xName = spec.x || (columns[0] || null);
-          let series = Array.isArray(spec.series) && spec.series.length ? spec.series : (spec.y ? [spec.y] : columns.filter(c => c !== xName).slice(0,3));
-          const type = (spec.type === 'bar') ? 'bar' : 'line';
+          const series = Array.isArray(spec.series) && spec.series.length ? spec.series : (spec.y ? [spec.y] : columns.filter(c => c !== xName).slice(0,3));
+          const rawType = String(spec.type || 'line').toLowerCase();
+          const type = (rawType === 'area') ? 'line' : (rawType === 'bar_horizontal' || rawType === 'bar-horizontal' || rawType === 'horizontal-bar') ? 'bar' : (rawType === 'pie' || rawType === 'doughnut' || rawType === 'scatter') ? rawType : (rawType === 'bar' ? 'bar' : 'line');
           const stacked = !!spec.stacked;
-          const xi = columns.indexOf(xName);
-          if (xi < 0) return;
+          const xi = columns.indexOf(xName); if (xi < 0) return;
           const labels = rows.map(r => r[xi]);
           const palette = ['#60a5fa','#34d399','#f472b6','#f59e0b','#a78bfa','#22d3ee'];
-          const datasets = [];
-          series.forEach((sname, i) => {
-            const si = columns.indexOf(sname);
-            if (si < 0) return;
-            const color = palette[i % palette.length];
-            const data = rows.map(r => (typeof r[si] === 'number' ? r[si] : Number(r[si]) || 0));
-            const base = { label: sname, data, parsing: false, borderColor: color, backgroundColor: color, borderWidth: 2, pointRadius: 0, tension: 0.2 };
-            if (type === 'line') { base.fill = (spec.type === 'area'); }
-            datasets.push(base);
-          });
-          t._chartStatus = { labels: labels.length, datasets: datasets.length };
-          if (!datasets.length || !labels.length) {
-            // Fallback to simple in-DOM bars using the first series if available
-            const fb = (datasets[0] && datasets[0].data) || [];
-            renderFallbackChart(t, labels, fb);
-            return;
+          let datasets;
+          if (type === 'scatter') {
+            const yi = columns.indexOf(spec.y || (columns.find(c => c !== xName) || ''));
+            if (yi < 0) return;
+            datasets = [{ label: spec.y || 'series', data: rows.map(r => ({ x: Number(r[xi]) || 0, y: Number(r[yi]) || 0 })), borderColor: palette[0], backgroundColor: palette[0] + '88' }];
+          } else if (type === 'pie' || type === 'doughnut') {
+            const yi = columns.indexOf(spec.y || (columns.find(c => c !== xName) || ''));
+            if (yi < 0) return;
+            datasets = [{ label: spec.y || 'value', data: rows.map(r => (typeof r[yi] === 'number' ? r[yi] : Number(r[yi]) || 0)), backgroundColor: rows.map((_, i) => palette[i % palette.length]) }];
+          } else {
+            datasets = series.map((sname, i) => {
+              const si = columns.indexOf(sname); if (si < 0) return null;
+              const color = palette[i % palette.length];
+              const data = rows.map(r => (typeof r[si] === 'number' ? r[si] : Number(r[si]) || 0));
+              const base = { label: sname, data, borderColor: color, backgroundColor: color + '88', borderWidth: 2, pointRadius: 0, tension: 0.2 };
+              if (rawType === 'area') base.fill = true;
+              return base;
+            }).filter(Boolean);
           }
-          // Ensure the canvas has width/height (Chart.js uses CSS size)
-          canvas.style.height = canvas.style.height || '320px';
-          if (!canvas.style.width || canvas.clientWidth === 0) canvas.style.width = '100%';
-          const options = {
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: { x: { type: 'category', stacked }, y: { type: 'linear', stacked, beginAtZero: true } },
-            plugins: { legend: { display: true }, title: { display: !!spec.title, text: spec.title || '' } }
-          };
+          if (!datasets.length || !labels.length) return;
+          canvas.style.height = canvas.style.height || '280px';
+          if (!canvas.style.width) canvas.style.width = '100%';
+          const options = { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: true }, title: { display: !!spec.title, text: spec.title || '' } } };
+          if (type === 'pie' || type === 'doughnut') {
+            // no scales
+          } else if (type === 'scatter') {
+            options.scales = { x: { type: 'linear', beginAtZero: true }, y: { type: 'linear', beginAtZero: true } };
+          } else {
+            options.scales = { x: { stacked }, y: { stacked, beginAtZero: true } };
+          }
+          if (rawType === 'bar_horizontal' || rawType === 'bar-horizontal' || rawType === 'horizontal-bar') options.indexAxis = 'y';
           t._chart = new Chart(ctx, { type, data: { labels, datasets }, options });
-          try { if (typeof t._chart.resize === 'function') t._chart.resize(); } catch {}
         } catch {}
       }
 
@@ -227,6 +310,20 @@
             // Reconstruct assistant tool panels by pairing tool_calls with tool results
             const out = [];
             let pendingTools = null;
+            let allTools = [];
+            function upsertTools(dst, srcBatch) {
+              for (const t of (srcBatch || [])) {
+                const i = dst.findIndex(x => x.id === t.id);
+                if (i >= 0) {
+                  // merge basic fields but keep existing output/start/end if present
+                  dst[i].name = t.name || dst[i].name;
+                  dst[i].arguments = (t.arguments != null) ? t.arguments : dst[i].arguments;
+                  dst[i].title = (t.title != null) ? t.title : dst[i].title;
+                } else {
+                  dst.push({ ...t });
+                }
+              }
+            }
             function parseArgs(raw) {
               try { return typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { return raw; }
             }
@@ -236,7 +333,7 @@
             for (const m of list) {
               if (!m) continue;
               if (m.role === 'assistant' && m.tool_calls) {
-                pendingTools = (m.tool_calls || []).map(tc => ({
+                const batch = (m.tool_calls || []).map(tc => ({
                   id: tc.id,
                   name: tc.function && tc.function.name,
                   arguments: parseArgs(tc.function && tc.function.arguments),
@@ -246,13 +343,20 @@
                   start: null,
                   end: null,
                 }));
+                pendingTools = batch;
+                upsertTools(allTools, batch);
                 // Skip adding this intermediate assistant message
                 continue;
               }
               if (m.role === 'tool') {
+                const parsed = parseJSON(m.content);
                 if (pendingTools) {
                   const t = pendingTools.find(x => x.id === m.tool_call_id);
-                  if (t) t.output = parseJSON(m.content);
+                  if (t) { t.output = parsed; if (typeof m.start_ms === 'number') t.start = m.start_ms; if (typeof m.end_ms === 'number') t.end = m.end_ms; }
+                }
+                if (allTools && allTools.length) {
+                  const t2 = allTools.find(x => x.id === m.tool_call_id);
+                  if (t2) { t2.output = parsed; if (typeof m.start_ms === 'number') t2.start = m.start_ms; if (typeof m.end_ms === 'number') t2.end = m.end_ms; }
                 }
                 continue;
               }
@@ -263,8 +367,9 @@
               if (m.role === 'assistant') {
                 const amsg = { role: 'assistant', content: m.content || '', renderRaw: false };
                 if (m.thinking) { amsg.thinking = m.thinking; amsg.thinkingExpanded = true; }
-                if (pendingTools && pendingTools.length) {
-                  amsg.tools = pendingTools.map(t => ({ ...t }));
+                const attach = (allTools && allTools.length) ? allTools : pendingTools;
+                if (attach && attach.length) {
+                  amsg.tools = attach.map(t => ({ ...t }));
                   // If we have a result, attach preview (supports sql_query or display_result)
                   const sqlTool = amsg.tools.find(t => (t.name === 'display_result' || t.name === 'sql_query') && t.output && t.output.columns && t.output.rows);
                   if (sqlTool) {
@@ -276,28 +381,20 @@
                 if (m.duration_ms != null) amsg.totalMs = m.duration_ms;
                 out.push(amsg);
                 pendingTools = null;
+                allTools = [];
               }
             }
             // If tools existed without a final assistant, show them as a separate assistant block
-            if (pendingTools && pendingTools.length) {
-              const amsg = { role: 'assistant', content: '', tools: pendingTools.map(t => ({ ...t })), renderRaw: false };
+            const leftover = (allTools && allTools.length) ? allTools : pendingTools;
+            if (leftover && leftover.length) {
+              const amsg = { role: 'assistant', content: '', tools: leftover.map(t => ({ ...t })), renderRaw: false };
               const sqlTool = amsg.tools.find(t => (t.name === 'display_result' || t.name === 'sql_query') && t.output && t.output.columns && t.output.rows);
               if (sqlTool) { const o = sqlTool.output; amsg.preview = { columns: o.columns, rows: o.rows, rowcount: o.rowcount }; amsg.previewExpanded = false; }
               out.push(amsg);
             }
             messages.value = out;
             await nextTick();
-            try {
-              for (const m of messages.value) {
-                for (const t of (m.tools || [])) {
-                  if (t.name === 'display_chart' && t.output) {
-                    t.expanded = true;
-                    t._chartId = t._chartId || ('chart-' + Math.random().toString(36).slice(2,9));
-                    renderChartForTool(t);
-                  }
-                }
-              }
-            } catch {}
+            try { messages.value.forEach((m, i) => { if (m.role === 'assistant') renderInlineChartsForMessage(i); }); } catch {}
           } else {
             messages.value = [];
           }
@@ -366,19 +463,19 @@
                 } else if (evt.type === 'tool_result') {
                   if (!assistantMsg.tools) assistantMsg.tools = [];
                   const existing = assistantMsg.tools.find(t => t.id === evt.id);
-                  if (existing) { existing.output = evt.output; existing.end = Date.now(); }
-                  else { assistantMsg.tools.push({ id: evt.id, name: evt.name, arguments: undefined, output: evt.output, expanded: false, start: Date.now(), end: Date.now() }); }
+                  const se = (typeof evt.start_ms === 'number') ? evt.start_ms : null;
+                  const ee = (typeof evt.end_ms === 'number') ? evt.end_ms : null;
+                  if (existing) {
+                    existing.output = evt.output;
+                    if (se != null) existing.start = se;
+                    if (ee != null) existing.end = ee; else existing.end = Date.now();
+                  } else {
+                    assistantMsg.tools.push({ id: evt.id, name: evt.name, arguments: undefined, output: evt.output, expanded: false, start: (se ?? Date.now()), end: (ee ?? Date.now()) });
+                  }
                   if ((evt.name === 'display_result' || evt.name === 'sql_query') && evt.output && evt.output.columns && evt.output.rows) { assistantMsg.preview = { columns: evt.output.columns, rows: evt.output.rows, rowcount: evt.output.rowcount }; assistantMsg.previewExpanded = false; }
                   if (evt.name === 'display_chart') {
                     const tool = existing || (assistantMsg.tools.find(t => t.id === evt.id));
-                    if (tool) {
-                      tool.expanded = true;
-                      tool._chartId = tool._chartId || ('chart-' + Math.random().toString(36).slice(2,9));
-                      await nextTick();
-                      renderChartForTool(tool);
-                      setTimeout(() => renderChartForTool(tool), 150);
-                      setTimeout(() => renderChartForTool(tool), 500);
-                    }
+                    if (tool) { tool._chartId = tool._chartId || ('chart-' + Math.random().toString(36).slice(2,9)); if (tool.expanded) { await nextTick(); renderChartForTool(tool); } }
                   }
                   await nextTick();
                 } else if (evt.tools) {
@@ -408,6 +505,7 @@
           // Store total duration on the assistant message
           try { assistantMsg.totalMs = (turnStart.value != null) ? (Date.now() - turnStart.value) : undefined; } catch {}
           streaming.value = false; controller = null; turnStart.value = null; await refreshSessions();
+          try { const idx = messages.value.lastIndexOf(assistantMsg); const i = idx >= 0 ? idx : (messages.value.length - 1); renderInlineChartsForMessage(i); } catch {}
         }
       }
 

@@ -272,14 +272,15 @@ def make_tools(workspace: Path) -> List[ToolSpec]:
             description=(
                 "Render a simple chart in the UI from tabular data. "
                 "Provide x (label column) and either y (single series) or series (array of column names). "
-                "Supported types: line, bar, area. Include columns and rows (or data: {columns, rows}). Max 500 rows."
+                "Supported types: line, bar, bar_horizontal, area, pie, doughnut, scatter. Include columns and rows (or data: {columns, rows}). Max 500 rows. "
+                "When you use this tool, you must also embed a matching inline chart block (```chart …```) in your final assistant message, using the same x/series and data, so executives see the chart in context."
             ),
             schema={
                 "type": "object",
                 "required": ["x"],
                 "properties": {
                     "title": {"type": "string", "description": "Short human title (<= 6 words)"},
-                    "type": {"type": "string", "enum": ["line", "bar", "area"], "default": "line"},
+                    "type": {"type": "string", "enum": ["line", "bar", "bar_horizontal", "area", "pie", "doughnut", "scatter"], "default": "line"},
                     "x": {"type": "string", "description": "Column name for x-axis labels"},
                     "y": {"type": "string", "description": "Single series column (alternative to series)"},
                     "series": {"type": "array", "items": {"type": "string"}, "description": "Series columns"},
