@@ -27,7 +27,7 @@
       const loadingSessions = ref(false);
       const loadingChat = ref(false);
       const showSettings = ref(false);
-      const settings = ref({ theme: 'dark', previewRowsCollapsed: 10, reducedMotion: false });
+      const settings = ref({ theme: 'dark', previewRowsCollapsed: 10, reducedMotion: false, showThinking: true });
       const toasts = ref([]);
       let controller = null;
       let onKey = null;
@@ -267,6 +267,14 @@
         const end = (t.output && t.end) ? t.end : Date.now();
         return Math.max(0, end - start);
       }
+      function llmElapsed(t) {
+        void tick.value;
+        if (!t) return null;
+        const s = (typeof t.llmStart === 'number') ? t.llmStart : null;
+        const e = (typeof t.llmEnd === 'number') ? t.llmEnd : (s != null ? Date.now() : null);
+        if (s == null || e == null) return null;
+        return Math.max(0, e - s);
+      }
       function formatDuration(ms) { if (ms == null) return ''; if (ms < 1000) return `${Math.round(ms)} ms`; const s = ms / 1000; if (s < 10) return `${s.toFixed(2)} s`; if (s < 60) return `${s.toFixed(1)} s`; const m = Math.floor(s / 60); const rem = Math.round(s - m * 60); return `${m}m ${rem}s`; }
       function turnElapsed() { void tick.value; if (!streaming.value || !turnStart.value) return 0; return Date.now() - turnStart.value; }
       function formatTimeAgo(ts) { if (!ts) return ''; const s = Math.floor((Date.now() - ts) / 1000); if (s < 60) return `${s}s ago`; const m = Math.floor(s / 60); if (m < 60) return `${m}m ago`; const h = Math.floor(m / 60); if (h < 24) return `${h}h ago`; const d = Math.floor(h / 24); return `${d}d ago`; }
@@ -342,6 +350,7 @@
                   expanded: false,
                   start: null,
                   end: null,
+                  thinking: m.thinking || undefined,
                 }));
                 pendingTools = batch;
                 upsertTools(allTools, batch);
@@ -370,6 +379,13 @@
                 const attach = (allTools && allTools.length) ? allTools : pendingTools;
                 if (attach && attach.length) {
                   amsg.tools = attach.map(t => ({ ...t }));
+                  // If there are display_chart tools, pre-assign chart IDs and auto-expand so charts render on load
+                  for (const t of amsg.tools) {
+                    if (t && t.name === 'display_chart') {
+                      t._chartId = t._chartId || ('chart-' + Math.random().toString(36).slice(2,9));
+                      t.expanded = true;
+                    }
+                  }
                   // If we have a result, attach preview (supports sql_query or display_result)
                   const sqlTool = amsg.tools.find(t => (t.name === 'display_result' || t.name === 'sql_query') && t.output && t.output.columns && t.output.rows);
                   if (sqlTool) {
@@ -388,13 +404,23 @@
             const leftover = (allTools && allTools.length) ? allTools : pendingTools;
             if (leftover && leftover.length) {
               const amsg = { role: 'assistant', content: '', tools: leftover.map(t => ({ ...t })), renderRaw: false };
+              for (const t of amsg.tools) { if (t && t.name === 'display_chart') { t._chartId = t._chartId || ('chart-' + Math.random().toString(36).slice(2,9)); t.expanded = true; } }
               const sqlTool = amsg.tools.find(t => (t.name === 'display_result' || t.name === 'sql_query') && t.output && t.output.columns && t.output.rows);
               if (sqlTool) { const o = sqlTool.output; amsg.preview = { columns: o.columns, rows: o.rows, rowcount: o.rowcount }; amsg.previewExpanded = false; }
               out.push(amsg);
             }
             messages.value = out;
             await nextTick();
-            try { messages.value.forEach((m, i) => { if (m.role === 'assistant') renderInlineChartsForMessage(i); }); } catch {}
+            try {
+              // Render any inline charts embedded in assistant content
+              messages.value.forEach((m, i) => { if (m.role === 'assistant') renderInlineChartsForMessage(i); });
+              // Render charts for any display_chart tools we've auto-expanded
+              messages.value.forEach(m => {
+                if (m.role === 'assistant' && Array.isArray(m.tools)) {
+                  m.tools.forEach(t => { if (t && t.name === 'display_chart' && t.expanded) { try { renderChartForTool(t); } catch {} } });
+                }
+              });
+            } catch {}
           } else {
             messages.value = [];
           }
@@ -441,7 +467,7 @@
         streaming.value = true; turnStart.value = Date.now();
         if (!tickTimer) { tickTimer = setInterval(() => { tick.value = (tick.value + 1) | 0; }, 100); }
         try {
-          const res = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chatId.value, message: text }), signal: controller.signal });
+          const res = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chatId.value, message: text, show_thinking: !!settings.value.showThinking }), signal: controller.signal });
           if (!res.ok || !res.body) {
             const msg = await res.text().catch(() => '');
             assistantMsg.content += (assistantMsg.content ? '\n\n' : '') + `_(error ${res.status}: ${msg.slice(0,200)})_`;
@@ -457,8 +483,21 @@
                 if (evt.type === 'tool_call') {
                   if (!assistantMsg.tools) assistantMsg.tools = [];
                   const existing = assistantMsg.tools.find(t => t.id === evt.id);
-                  if (existing) { existing.name = evt.name; existing.arguments = evt.arguments; existing.title = (evt.arguments && evt.arguments.title) || existing.title; }
-                  else { assistantMsg.tools.push({ id: evt.id, name: evt.name, title: (evt.arguments && evt.arguments.title) || undefined, arguments: evt.arguments, output: undefined, expanded: false, start: Date.now(), end: null }); }
+                  const llmStart = (typeof evt.llm_start_ms === 'number') ? evt.llm_start_ms : null;
+                  const llmEnd = (typeof evt.llm_end_ms === 'number') ? evt.llm_end_ms : null;
+                  if (existing) {
+                    existing.name = evt.name;
+                    existing.arguments = evt.arguments;
+                    existing.title = (evt.arguments && evt.arguments.title) || existing.title;
+                    existing.llmStart = llmStart;
+                    existing.llmEnd = llmEnd;
+                    if (evt.thinking != null) existing.thinking = String(evt.thinking);
+                  }
+                  else {
+                    const item = { id: evt.id, name: evt.name, title: (evt.arguments && evt.arguments.title) || undefined, arguments: evt.arguments, output: undefined, expanded: false, start: Date.now(), end: null, llmStart: llmStart, llmEnd: llmEnd };
+                    if (evt.thinking != null) item.thinking = String(evt.thinking);
+                    assistantMsg.tools.push(item);
+                  }
                   await nextTick();
                 } else if (evt.type === 'tool_result') {
                   if (!assistantMsg.tools) assistantMsg.tools = [];
@@ -629,7 +668,7 @@
 
       function previewRowCount(preview) { if (!preview) return 0; if (preview.rowcount !== undefined && preview.rowcount !== null) return preview.rowcount; if (Array.isArray(preview.rows)) return preview.rows.length; return 0; }
 
-      return { chatId, messages, input, inputEl, streaming, model, allowedModels, sidebarOpen, sessions, loadingSessions, loadingChat, showSettings, settings, toasts, newChat, createChat, selectChat, renameChat, deleteChat, onSubmit, stopStreaming, retryLast, canRetry, copyText, renderMarkdown, renderCode, renderSQL, toolSummary, displayTitle, toggleTool, toolError, copyJSON, copyCSV, downloadCSV, previewRowCount, toolElapsed, formatDuration, turnElapsed, sortedSessions, formatTimeAgo, autosize, saveSettings, toggleRender, applyModel, renderChartForTool };
+      return { chatId, messages, input, inputEl, streaming, model, allowedModels, sidebarOpen, sessions, loadingSessions, loadingChat, showSettings, settings, toasts, newChat, createChat, selectChat, renameChat, deleteChat, onSubmit, stopStreaming, retryLast, canRetry, copyText, renderMarkdown, renderCode, renderSQL, toolSummary, displayTitle, toggleTool, toolError, copyJSON, copyCSV, downloadCSV, previewRowCount, toolElapsed, llmElapsed, formatDuration, turnElapsed, sortedSessions, formatTimeAgo, autosize, saveSettings, toggleRender, applyModel, renderChartForTool };
     }
   }).mount('#app');
 })();

@@ -44,7 +44,8 @@ class Config:
         # Langfuse config
         lf_pub = os.getenv("LANGFUSE_PUBLIC_KEY") or None
         lf_sec = os.getenv("LANGFUSE_SECRET_KEY") or None
-        lf_host = os.getenv("LANGFUSE_HOST") or None
+        # Support both LANGFUSE_HOST (current) and LANGFUSE_BASE_URL (legacy/docs)
+        lf_host = os.getenv("LANGFUSE_HOST") or os.getenv("LANGFUSE_BASE_URL") or None
         tracing_on = bool(os.getenv("TRACING_ENABLED", "1").strip() != "0")
 
         return Config(

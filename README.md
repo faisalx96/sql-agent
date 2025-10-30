@@ -16,22 +16,20 @@ What’s included
 Why not Streamlit? This aims for a native-feeling, dependency-light UI that runs anywhere you can start a web server. No ceremony, no extra app shell.
 
 Quickstart
-1) Python env
-   - python -m venv .venv
-   - source .venv/bin/activate  # Windows: .venv\\Scripts\\activate
-   - pip install -U pip
-   - pip install openai fastapi "uvicorn[standard]" python-dotenv orjson
-
-   Optional (Poetry):
-   - pip install poetry
-   - poetry install
+1) One environment (no mixing)
+   - Use the provided helper to create and use a local venv just for this project:
+     - bash scripts/dev.sh
+   - It will create `.venv/`, install dependencies from `requirements.txt` (includes langfuse), and run the server with that interpreter.
+   - Tip: Prefer `python -m uvicorn ...` through this script vs a global `uvicorn` to avoid PATH mixups.
 
 2) Configure
    - cp .env.example .env
    - Set OPENAI_API_KEY and optionally OPENAI_MODEL (defaults to gpt-4o-mini)
 
 3) Run
-   - uvicorn app.server:create_app --factory --reload --host ${APP_HOST:-127.0.0.1} --port ${APP_PORT:-8000}
+   - Simple: bash scripts/dev.sh
+   - Manual (if you already activated .venv):
+     - python -m uvicorn app.server:app --reload --host ${APP_HOST:-127.0.0.1} --port ${APP_PORT:-8000}
    - Open http://127.0.0.1:8000
 
 Folder layout
@@ -85,7 +83,7 @@ Common tweaks for POCs
 - Add custom tools: e.g., run linters, query a DB, call internal APIs (wrap them with careful auth and rate limiting).
 
 Troubleshooting
-- ImportError: Ensure dependencies are installed as shown in Quickstart.
+- ImportError / ModuleNotFoundError: Ensure you started via `bash scripts/dev.sh` or activated `.venv` in this repo. If your prompt shows another venv (or conda `base`) at the same time, deactivate it first, then run the script again.
 - 401 from OpenAI: Verify OPENAI_API_KEY, organization access, and model name.
 - Network-restricted env: Point OPENAI_BASE_URL to your internal gateway if applicable.
 

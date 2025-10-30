@@ -5,6 +5,7 @@ import logging
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
+from datetime import datetime, timezone
 
 
 logger = logging.getLogger("sql-agent.tracing")
@@ -12,6 +13,15 @@ logger = logging.getLogger("sql-agent.tracing")
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
+
+
+def _ms_to_dt(ms: Optional[int]) -> Optional[datetime]:
+    try:
+        if ms is None:
+            return None
+        return datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc)
+    except Exception:
+        return None
 
 
 @dataclass
@@ -36,26 +46,42 @@ class TraceHandle:
                         sp.end(output={"ok": True})
                 except Exception:
                     # Fallback to direct API
-                    if hasattr(self._client, "observations") and hasattr(
-                        self._client.observations, "create_span"
-                    ):
-                        self._client.observations.create_span(
-                            trace_id=self.trace_id,
-                            name=name,
-                            input=data or {},
-                            output={"ok": True},
-                        )
+                    if hasattr(self._client, "observations"):
+                        try:
+                            if hasattr(self._client.observations, "create_event"):
+                                self._client.observations.create_event(
+                                    trace_id=self.trace_id,
+                                    name=name,
+                                    input=data or {},
+                                )
+                            elif hasattr(self._client.observations, "create_span"):
+                                self._client.observations.create_span(
+                                    trace_id=self.trace_id,
+                                    name=name,
+                                    input=data or {},
+                                    output={"ok": True},
+                                )
+                        except Exception:
+                            pass
             else:
                 # Older client APIs
-                if hasattr(self._client, "observations") and hasattr(
-                    self._client.observations, "create_span"
-                ):
-                    self._client.observations.create_span(
-                        trace_id=self.trace_id,
-                        name=name,
-                        input=data or {},
-                        output={"ok": True},
-                    )
+                if hasattr(self._client, "observations"):
+                    try:
+                        if hasattr(self._client.observations, "create_event"):
+                            self._client.observations.create_event(
+                                trace_id=self.trace_id,
+                                name=name,
+                                input=data or {},
+                            )
+                        elif hasattr(self._client.observations, "create_span"):
+                            self._client.observations.create_span(
+                                trace_id=self.trace_id,
+                                name=name,
+                                input=data or {},
+                                output={"ok": True},
+                            )
+                    except Exception:
+                        pass
         except Exception:
             logger.debug("langfuse event emit failed", exc_info=True)
 
@@ -87,29 +113,64 @@ class TraceHandle:
             if end_ms:
                 payload["end_time"] = end_ms
 
+            st_dt = _ms_to_dt(start_ms)
+            en_dt = _ms_to_dt(end_ms)
+
             if self._trace_obj and hasattr(self._trace_obj, "generation"):
-                gen = self._trace_obj.generation(
-                    name=name,
-                    model=model,
-                    input=input,
-                    metadata=metadata or {},
-                )
+                # Try to record start_time on object API when supported
+                try:
+                    if st_dt is not None:
+                        gen = self._trace_obj.generation(
+                            name=name,
+                            model=model,
+                            input=input,
+                            metadata=metadata or {},
+                            start_time=st_dt,
+                        )
+                    else:
+                        gen = self._trace_obj.generation(
+                            name=name,
+                            model=model,
+                            input=input,
+                            metadata=metadata or {},
+                        )
+                except TypeError:
+                    gen = self._trace_obj.generation(
+                        name=name,
+                        model=model,
+                        input=input,
+                        metadata=metadata or {},
+                    )
                 if hasattr(gen, "end"):
                     try:
-                        gen.end(output=output, usage=usage)
-                    except TypeError:
-                        # Some SDKs use update() instead of end()
+                        if en_dt is not None:
+                            gen.end(output=output, usage=usage, end_time=en_dt)
+                        else:
+                            gen.end(output=output, usage=usage)
+                    except Exception:
+                        # If SDK signature differs, fall back to direct API
                         try:
-                            gen.update(output=output, usage=usage)
+                            if hasattr(self._client, "observations") and hasattr(
+                                self._client.observations, "create_generation"
+                            ):
+                                # Prefer datetime for timestamps
+                                if st_dt is not None:
+                                    payload["start_time"] = st_dt
+                                if en_dt is not None:
+                                    payload["end_time"] = en_dt
+                                self._client.observations.create_generation(trace_id=self.trace_id, **payload)
                         except Exception:
                             pass
             else:
                 if hasattr(self._client, "observations") and hasattr(
                     self._client.observations, "create_generation"
                 ):
-                    self._client.observations.create_generation(
-                        trace_id=self.trace_id, **payload
-                    )
+                    # Prefer datetime for timestamps
+                    if st_dt is not None:
+                        payload["start_time"] = st_dt
+                    if en_dt is not None:
+                        payload["end_time"] = en_dt
+                    self._client.observations.create_generation(trace_id=self.trace_id, **payload)
         except Exception:
             logger.debug("langfuse generation emit failed", exc_info=True)
 
@@ -132,23 +193,46 @@ class TraceHandle:
             if end_ms:
                 payload["end_time"] = end_ms
 
+            st_dt = _ms_to_dt(start_ms)
+            en_dt = _ms_to_dt(end_ms)
             if self._trace_obj and hasattr(self._trace_obj, "span"):
-                sp = self._trace_obj.span(name=name, input=input, metadata=metadata or {})
+                try:
+                    if st_dt is not None:
+                        sp = self._trace_obj.span(
+                            name=name, input=input, metadata=metadata or {}, start_time=st_dt
+                        )
+                    else:
+                        sp = self._trace_obj.span(name=name, input=input, metadata=metadata or {})
+                except TypeError:
+                    sp = self._trace_obj.span(name=name, input=input, metadata=metadata or {})
                 if hasattr(sp, "end"):
                     try:
-                        sp.end(output=output)
-                    except TypeError:
+                        if en_dt is not None:
+                            sp.end(output=output, end_time=en_dt)
+                        else:
+                            sp.end(output=output)
+                    except Exception:
+                        # If SDK signature differs, fall back to direct API
                         try:
-                            sp.update(output=output)
+                            if hasattr(self._client, "observations") and hasattr(
+                                self._client.observations, "create_span"
+                            ):
+                                if st_dt is not None:
+                                    payload["start_time"] = st_dt
+                                if en_dt is not None:
+                                    payload["end_time"] = en_dt
+                                self._client.observations.create_span(trace_id=self.trace_id, **payload)
                         except Exception:
                             pass
             else:
                 if hasattr(self._client, "observations") and hasattr(
                     self._client.observations, "create_span"
                 ):
-                    self._client.observations.create_span(
-                        trace_id=self.trace_id, **payload
-                    )
+                    if st_dt is not None:
+                        payload["start_time"] = st_dt
+                    if en_dt is not None:
+                        payload["end_time"] = en_dt
+                    self._client.observations.create_span(trace_id=self.trace_id, **payload)
         except Exception:
             logger.debug("langfuse span emit failed", exc_info=True)
 
@@ -166,18 +250,18 @@ class Tracer:
         self._client = None
         if self.enabled:
             try:
-                from langfuse import Langfuse  # type: ignore
+                try:
+                    from langfuse import Langfuse  # type: ignore
+                except Exception:  # pragma: no cover - fallback for older packages
+                    from langfuse.client import Langfuse  # type: ignore
 
                 self._client = Langfuse(
                     public_key=public_key,
                     secret_key=secret_key,
                     host=host,
                 )
-            except Exception:
-                logger.warning(
-                    "Langfuse SDK unavailable or failed to initialize; tracing disabled"
-                )
-                self.enabled = False
+            except Exception as e:
+                logger.error("Langfuse SDK unavailable or failed to initialize; tracing disabled", exc_info=True)
 
     @classmethod
     def from_config(cls, cfg: Any) -> "Tracer":
@@ -238,7 +322,15 @@ class Tracer:
 
     def flush(self) -> None:
         try:
-            if self.enabled and self._client and hasattr(self._client, "flush"):
+            if not (self.enabled and self._client):
+                return
+            if hasattr(self._client, "flush"):
                 self._client.flush()
+            elif hasattr(self._client, "shutdown"):
+                # Some SDK versions expose shutdown() instead of flush()
+                try:
+                    self._client.shutdown()
+                except Exception:
+                    pass
         except Exception:
             logger.debug("langfuse flush failed", exc_info=True)
