@@ -461,11 +461,8 @@ async def chat(req: Request):
                 choice = resp.choices[0]
                 msg = choice.message
                 thinking_text = extract_thinking_from_message(msg) or ""
-                # Only stream 'thinking' when enabled for GPT-5 models
-                try:
-                    allow_thinking = not lower_model.startswith("gpt-5") or show_thinking
-                except Exception:
-                    allow_thinking = show_thinking
+                # Always allow thinking when present; UI controls visibility
+                allow_thinking = True
                 if thinking_text and allow_thinking:
                     yield orjson.dumps({"type": "thinking", "content": thinking_text}).decode() + "\n"
 
@@ -546,6 +543,9 @@ async def chat(req: Request):
                         "tool_calls": [tc.model_dump() for tc in msg.tool_calls],
                         "content": msg.content,
                         "thinking": (thinking_text if allow_thinking else None) or None,
+                        "model": current_model,
+                        "llm_start_ms": llm_start,
+                        "llm_end_ms": llm_end,
                     }
                     store.append(chat_id, tool_call_msg, updated_at=int(time.time() * 1000))
                     history.append(tool_call_msg)
@@ -660,7 +660,13 @@ async def chat(req: Request):
                 # Final answer path (chunked to the UI but not streamed from provider)
                 content = msg.content or ""
                 duration_ms = int(time.time() * 1000) - turn_start
-                final_msg = {"role": "assistant", "content": content, "duration_ms": duration_ms, "thinking": ((thinking_text if allow_thinking else None) or None)}
+                final_msg = {
+                    "role": "assistant",
+                    "content": content,
+                    "duration_ms": duration_ms,
+                    "thinking": ((thinking_text if allow_thinking else None) or None),
+                    "model": current_model,
+                }
                 store.append(chat_id, final_msg, updated_at=int(time.time() * 1000))
                 history.append(final_msg)
 
@@ -696,6 +702,8 @@ async def chat(req: Request):
                         "content": assistant_text,
                         "thinking": thinking_text or None,
                         "model": current_model,
+                        "llm_start_ms": llm_start,
+                        "llm_end_ms": llm_end,
                     }
                     store.append(chat_id, tool_call_msg, updated_at=int(_t.time() * 1000))
                     history.append(tool_call_msg)

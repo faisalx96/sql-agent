@@ -350,6 +350,8 @@
             for (const m of list) {
               if (!m) continue;
               if (m.role === 'assistant' && m.tool_calls) {
+                const llmStart = (typeof m.llm_start_ms === 'number') ? m.llm_start_ms : null;
+                const llmEnd = (typeof m.llm_end_ms === 'number') ? m.llm_end_ms : null;
                 const batch = (m.tool_calls || []).map(tc => ({
                   id: tc.id,
                   name: tc.function && tc.function.name,
@@ -359,6 +361,8 @@
                   expanded: false,
                   start: null,
                   end: null,
+                  llmStart: llmStart,
+                  llmEnd: llmEnd,
                   thinking: m.thinking || undefined,
                 }));
                 pendingTools = batch;
@@ -384,7 +388,7 @@
               }
               if (m.role === 'assistant') {
                 const amsg = { role: 'assistant', content: m.content || '', renderRaw: false };
-                if (m.model) amsg.model = m.model;
+                if (m.model) amsg.model = m.model; else if (model.value) amsg.model = model.value;
                 if (m.thinking) { amsg.thinking = m.thinking; amsg.thinkingExpanded = true; }
                 const attach = (allTools && allTools.length) ? allTools : pendingTools;
                 if (attach && attach.length) {
