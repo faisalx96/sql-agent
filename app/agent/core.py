@@ -51,6 +51,7 @@ class Agent:
                     "role": "assistant",
                     "tool_calls": [tc.model_dump() for tc in msg.tool_calls],
                     "content": msg.content,
+                    "model": self.model,
                 })
                 for tc in msg.tool_calls:
                     result = dispatch_tool(self.tools, tc.function.name, tc.function.arguments)
@@ -64,6 +65,5 @@ class Agent:
                 continue
 
             content = msg.content or ""
-            history.append({"role": "assistant", "content": content})
+            history.append({"role": "assistant", "content": content, "model": self.model})
             return {"content": content, "messages": history}
-

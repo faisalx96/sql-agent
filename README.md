@@ -47,7 +47,7 @@ Folder layout
 Config
 - OPENAI_API_KEY: Your API key
 - OPENAI_BASE_URL: Use custom base URL if you run via a proxy/gateway
-- OPENAI_MODEL: Default gpt-4o-mini; switch to your org’s standard model
+- OPENAI_MODEL: Default gpt-5-mini; switch to your org’s standard model
 - APP_HOST / APP_PORT: Web server bind
 - WORKSPACE_DIR: Filesystem root agents tools can touch
 - DATABASE_URL: Defaults to sqlite:///workspace/agent.db. Set to your DB if needed. The agent uses SQLite by default.
@@ -86,6 +86,17 @@ Troubleshooting
 - ImportError / ModuleNotFoundError: Ensure you started via `bash scripts/dev.sh` or activated `.venv` in this repo. If your prompt shows another venv (or conda `base`) at the same time, deactivate it first, then run the script again.
 - 401 from OpenAI: Verify OPENAI_API_KEY, organization access, and model name.
 - Network-restricted env: Point OPENAI_BASE_URL to your internal gateway if applicable.
+
+Using OpenRouter
+- Set env for OpenRouter (no code changes needed):
+  - `OPENAI_BASE_URL=https://openrouter.ai/api/v1`
+  - Use your OpenRouter key via either `OPENAI_API_KEY=sk-or-v1-...` or `OPENROUTER_API_KEY=sk-or-v1-...`.
+  - Optional but recommended headers per OpenRouter docs (added automatically if provided):
+    - `OPENROUTER_SITE_URL=https://your-app.example.com` (sets `HTTP-Referer`)
+    - `OPENROUTER_APP_NAME=SQL Agent` (sets `X-Title`)
+- Model names: use OpenRouter model IDs (e.g., `openai/gpt-4o-mini`, `anthropic/claude-3.5-sonnet`, `meta-llama/llama-3.1-8b-instruct`).
+  - You can change the model from the UI dropdown; choose “Custom…” to enter any model ID not listed.
+  - Or set a default via `OPENAI_MODEL` before starting the server.
 
 License
 - Intended as an internal template/recipe. Add your org’s standard header/policy if needed.

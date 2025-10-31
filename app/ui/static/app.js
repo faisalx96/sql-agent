@@ -21,6 +21,9 @@
       const inputEl = ref(null);
       const model = ref('');
       const allowedModels = ref([]);
+      const loadingModels = ref(false);
+      const modelOpen = ref(false);
+      const modelQuery = ref('');
       const streaming = ref(false);
       const sidebarOpen = ref(false);
       const sessions = ref([]); // {id, title, created_at, updated_at}
@@ -147,8 +150,7 @@
           const cols = obj.columns || (obj.data && obj.data.columns);
           const rows = obj.rows || (obj.data && obj.data.rows);
           if (!Array.isArray(cols) || !Array.isArray(rows) || rows.length === 0) return false;
-          // Require an axis hint
-          if (!obj.x && !obj.y && !(Array.isArray(obj.series) && obj.series.length)) return false;
+          // Heuristic: allow missing axis hints; we'll default x to first column and y/series to remaining
           // Heuristics to avoid false positives
           if (cols.length > 64) return false;
           if (rows.length > 2000) return false;
@@ -158,7 +160,7 @@
       function renderInlineChartsForMessage(idx, attempt = 0) {
         try {
           // If Chart isn't ready yet, retry shortly (initial page load)
-          if (typeof Chart === 'undefined') { if (attempt < 5) setTimeout(() => renderInlineChartsForMessage(idx, attempt+1), 80); return; }
+          if (typeof Chart === 'undefined') { if (attempt < 25) setTimeout(() => renderInlineChartsForMessage(idx, attempt+1), 120); return; }
           ensureChartRegistered();
           const root = document.getElementById('msg-content-' + idx);
           if (!root) return;
@@ -176,6 +178,13 @@
               try { const parsed = JSON.parse(raw); if (isChartSpec(parsed)) spec = parsed; } catch { spec = null; }
             }
             if (!spec) return;
+            // Fill sensible defaults for missing axis hints
+            try {
+              if (!spec.x && Array.isArray(spec.columns) && spec.columns.length) spec.x = spec.columns[0];
+              if (!spec.y && !spec.series && Array.isArray(spec.columns) && spec.columns.length > 1) {
+                spec.series = spec.columns.filter(c => c !== spec.x).slice(0, 3);
+              }
+            } catch {}
             const ds = buildDatasetsFromSpec(spec); if (!ds) return;
             const canvas = document.createElement('canvas');
             const cid = 'mc-' + idx + '-' + i + '-' + Math.random().toString(36).slice(2,6);
@@ -375,15 +384,17 @@
               }
               if (m.role === 'assistant') {
                 const amsg = { role: 'assistant', content: m.content || '', renderRaw: false };
+                if (m.model) amsg.model = m.model;
                 if (m.thinking) { amsg.thinking = m.thinking; amsg.thinkingExpanded = true; }
                 const attach = (allTools && allTools.length) ? allTools : pendingTools;
                 if (attach && attach.length) {
                   amsg.tools = attach.map(t => ({ ...t }));
-                  // If there are display_chart tools, pre-assign chart IDs and auto-expand so charts render on load
+                  // If there are display_chart tools, pre-assign chart IDs
                   for (const t of amsg.tools) {
                     if (t && t.name === 'display_chart') {
                       t._chartId = t._chartId || ('chart-' + Math.random().toString(36).slice(2,9));
-                      t.expanded = true;
+                      // Keep collapsed on refresh; render when user expands
+                      t.expanded = false;
                     }
                   }
                   // If we have a result, attach preview (supports sql_query or display_result)
@@ -404,7 +415,9 @@
             const leftover = (allTools && allTools.length) ? allTools : pendingTools;
             if (leftover && leftover.length) {
               const amsg = { role: 'assistant', content: '', tools: leftover.map(t => ({ ...t })), renderRaw: false };
-              for (const t of amsg.tools) { if (t && t.name === 'display_chart') { t._chartId = t._chartId || ('chart-' + Math.random().toString(36).slice(2,9)); t.expanded = true; } }
+              // Best-effort: show current session model if available
+              if (model.value) amsg.model = model.value;
+              for (const t of amsg.tools) { if (t && t.name === 'display_chart') { t._chartId = t._chartId || ('chart-' + Math.random().toString(36).slice(2,9)); t.expanded = false; } }
               const sqlTool = amsg.tools.find(t => (t.name === 'display_result' || t.name === 'sql_query') && t.output && t.output.columns && t.output.rows);
               if (sqlTool) { const o = sqlTool.output; amsg.preview = { columns: o.columns, rows: o.rows, rowcount: o.rowcount }; amsg.previewExpanded = false; }
               out.push(amsg);
@@ -420,6 +433,12 @@
                   m.tools.forEach(t => { if (t && t.name === 'display_chart' && t.expanded) { try { renderChartForTool(t); } catch {} } });
                 }
               });
+              // Backup pass after a short delay (in case Chart.js finishes loading later)
+              setTimeout(() => {
+                try {
+                  messages.value.forEach((m, i) => { if (m.role === 'assistant') renderInlineChartsForMessage(i); });
+                } catch {}
+              }, 400);
             } catch {}
           } else {
             messages.value = [];
@@ -436,7 +455,6 @@
         } catch {}
       }
       async function deleteChat(id) {
-        if (!confirm('Delete this chat?')) return;
         try { await fetch(`/api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }); } catch {}
         await refreshSessions();
         if (chatId.value === id) {
@@ -451,7 +469,7 @@
         await ensureChat();
         const userMsg = { role: 'user', content: text };
         messages.value.push(userMsg);
-        const assistantMsg = { role: 'assistant', content: '', renderRaw: false };
+        const assistantMsg = { role: 'assistant', content: '', renderRaw: false, model: model.value || undefined };
         messages.value.push(assistantMsg);
         // If current session has no title, set one from the first user message
         const sess = sessions.value.find(s => s.id === chatId.value);
@@ -556,9 +574,10 @@
       onMounted(async () => {
         loadSettings();
         // Close settings on Escape
-        onKey = (e) => { if (e.key === 'Escape') showSettings.value = false; };
+        onKey = (e) => { if (e.key === 'Escape') { showSettings.value = false; modelOpen.value = false; } };
         window.addEventListener('keydown', onKey);
-        try { const r = await fetch('/api/meta'); if (r.ok) { const d = await r.json(); model.value = d.model || ''; allowedModels.value = Array.isArray(d.allowed_models) ? d.allowed_models : []; } } catch {}
+        try { const r = await fetch('/api/meta'); if (r.ok) { const d = await r.json(); model.value = d.model || ''; allowedModels.value = []; } } catch {}
+        await refreshModels();
         await refreshSessions();
         const first = sortedSessions()[0];
         if (first) {
@@ -569,6 +588,28 @@
         showSettings.value = false;
       });
       onUnmounted(() => { if (tickTimer) clearInterval(tickTimer); if (onKey) window.removeEventListener('keydown', onKey); });
+
+      // Models listing from server/provider
+      async function refreshModels() {
+        loadingModels.value = true;
+        try {
+          const r = await fetch('/api/models');
+          if (r.ok) {
+            const d = await r.json();
+            const list = Array.isArray(d.models) ? d.models : [];
+            if (list.length) allowedModels.value = list;
+          }
+        } catch {}
+        finally { loadingModels.value = false; }
+      }
+      function filteredModels() {
+        const q = (modelQuery.value || '').toLowerCase().trim();
+        if (!q) return allowedModels.value;
+        return allowedModels.value.filter(m => m.toLowerCase().includes(q));
+      }
+      function filteredHasExact() { const q = (modelQuery.value || '').trim(); return !!allowedModels.value.find(m => m === q); }
+      function pickModel(name) { modelOpen.value = false; modelQuery.value = ''; applyModel(name); }
+      function applySearchedModel() { const q = (modelQuery.value || '').trim(); if (q) { pickModel(q); } }
 
       // Tool UI helpers
       function toolSummary(t) {
@@ -655,8 +696,13 @@
 
       async function applyModel(newModel) {
         if (!chatId.value) return;
-        const name = String(newModel || '').trim();
+        let name = String(newModel || '').trim();
         if (!name) return;
+        if (name === '__custom__') {
+          const entered = prompt('Enter model ID (e.g., openai/gpt-4o-mini, anthropic/claude-3.5-sonnet):', model.value || '');
+          if (!entered) return;
+          name = String(entered).trim();
+        }
         try {
           await fetch(`/api/sessions/${encodeURIComponent(chatId.value)}`, {
             method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: name })
@@ -668,7 +714,7 @@
 
       function previewRowCount(preview) { if (!preview) return 0; if (preview.rowcount !== undefined && preview.rowcount !== null) return preview.rowcount; if (Array.isArray(preview.rows)) return preview.rows.length; return 0; }
 
-      return { chatId, messages, input, inputEl, streaming, model, allowedModels, sidebarOpen, sessions, loadingSessions, loadingChat, showSettings, settings, toasts, newChat, createChat, selectChat, renameChat, deleteChat, onSubmit, stopStreaming, retryLast, canRetry, copyText, renderMarkdown, renderCode, renderSQL, toolSummary, displayTitle, toggleTool, toolError, copyJSON, copyCSV, downloadCSV, previewRowCount, toolElapsed, llmElapsed, formatDuration, turnElapsed, sortedSessions, formatTimeAgo, autosize, saveSettings, toggleRender, applyModel, renderChartForTool };
+      return { chatId, messages, input, inputEl, streaming, model, allowedModels, loadingModels, modelOpen, modelQuery, sidebarOpen, sessions, loadingSessions, loadingChat, showSettings, settings, toasts, newChat, createChat, selectChat, renameChat, deleteChat, onSubmit, stopStreaming, retryLast, canRetry, copyText, renderMarkdown, renderCode, renderSQL, toolSummary, displayTitle, toggleTool, toolError, copyJSON, copyCSV, downloadCSV, previewRowCount, toolElapsed, llmElapsed, formatDuration, turnElapsed, sortedSessions, formatTimeAgo, autosize, saveSettings, toggleRender, applyModel, renderChartForTool, refreshModels, filteredModels, filteredHasExact, pickModel, applySearchedModel };
     }
   }).mount('#app');
 })();

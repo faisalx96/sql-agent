@@ -33,6 +33,8 @@ if not logger.handlers:
 client_kwargs: Dict[str, Any] = {"api_key": cfg.openai_api_key}
 if cfg.openai_base_url:
     client_kwargs["base_url"] = cfg.openai_base_url
+if cfg.openai_default_headers:
+    client_kwargs["default_headers"] = cfg.openai_default_headers
 
 client = OpenAI(**client_kwargs)
 
@@ -178,29 +180,54 @@ def index() -> HTMLResponse:
 
 @app.get("/api/meta")
 def meta() -> Dict[str, Any]:
-    """Basic app metadata for the UI with a static model list."""
-    static_models = [
-        "gpt-4o",
-        "gpt-4o-mini",
-        "gpt-5",
-        "gpt-5-mini",
-        "gpt-5-nano",
-    ]
-    # Put current default first if present, dedupe while preserving order
-    ordered: list[str] = []
+    """Basic app metadata for the UI.
+
+    Note: We no longer expose a static list of models here. The UI should call
+    /api/models to fetch the live provider list. For compatibility, we return
+    an empty allowed_models array.
+    """
+    return {"model": agent.model, "allowed_models": []}
+
+
+@app.get("/api/models")
+def list_models() -> Dict[str, Any]:
+    """List available models from the configured provider (OpenAI-compatible).
+
+    - Attempts provider listing via SDK. If it fails, returns a merged list of
+      the static models from /api/meta with the current default model.
+    - When using OpenRouter (OPENAI_BASE_URL contains openrouter.ai), this will
+      return the full list visible to your key.
+    """
+    models: list[str] = []
+    try:
+        resp = client.models.list()
+        items = getattr(resp, "data", None) or []
+        for m in items:
+            mid = None
+            try:
+                mid = getattr(m, "id", None)
+            except Exception:
+                pass
+            if mid is None and isinstance(m, dict):
+                mid = m.get("id")
+            if mid:
+                models.append(str(mid))
+    except Exception:
+        models = []
+
+    # If provider returns nothing, fall back to current default only (no static list)
+    if not models:
+        return {"models": [agent.model] if agent.model else []}
+    # Otherwise return provider list as-is (deduped, order preserved)
     seen: set[str] = set()
-    if agent.model in static_models:
-        ordered.append(agent.model); seen.add(agent.model)
-    for mid in static_models:
-        if mid not in seen:
-            ordered.append(mid); seen.add(mid)
-    return {
-        "model": agent.model,
-        "allowed_models": ordered,
-    }
+    out: list[str] = []
+    for m in models:
+        if m not in seen:
+            out.append(m); seen.add(m)
+    return {"models": out}
 
 
-# The UI uses a static model list from /api/meta.allowed_models; live listing endpoint removed per request.
+# The UI fetches the live model list from /api/models; /api/meta.allowed_models is kept empty for compatibility.
 
 
 @app.get("/api/debug/tools")
@@ -668,6 +695,7 @@ async def chat(req: Request):
                         "tool_calls": tool_calls_list,
                         "content": assistant_text,
                         "thinking": thinking_text or None,
+                        "model": current_model,
                     }
                     store.append(chat_id, tool_call_msg, updated_at=int(_t.time() * 1000))
                     history.append(tool_call_msg)
@@ -729,6 +757,7 @@ async def chat(req: Request):
                     "content": assistant_text,
                     "duration_ms": duration_ms,
                     "thinking": thinking_text or None,
+                    "model": current_model,
                 }
                 store.append(chat_id, final_msg, updated_at=int(time.time() * 1000))
                 history.append(final_msg)

@@ -12,6 +12,8 @@ class Config:
     openai_api_key: str
     openai_base_url: str | None
     openai_model: str
+    # Optional default headers for OpenAI-compatible providers (e.g., OpenRouter)
+    openai_default_headers: dict | None
     app_host: str
     app_port: int
     workspace_dir: Path
@@ -27,9 +29,10 @@ class Config:
         # Load .env if present
         load_dotenv(override=False)
 
-        api_key = os.getenv("OPENAI_API_KEY") or ""
+        # Prefer OPENAI_API_KEY but fall back to OPENROUTER_API_KEY for convenience
+        api_key = os.getenv("OPENAI_API_KEY") or os.getenv("OPENROUTER_API_KEY") or ""
         base_url = os.getenv("OPENAI_BASE_URL") or None
-        model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
         host = os.getenv("APP_HOST", "127.0.0.1")
         port = int(os.getenv("APP_PORT", "8000"))
         workspace = Path(os.getenv("WORKSPACE_DIR", "workspace")).resolve()
@@ -48,10 +51,26 @@ class Config:
         lf_host = os.getenv("LANGFUSE_HOST") or os.getenv("LANGFUSE_BASE_URL") or None
         tracing_on = bool(os.getenv("TRACING_ENABLED", "1").strip() != "0")
 
+        # Optional default headers for OpenRouter (recommended: HTTP-Referer and X-Title)
+        default_headers = None
+        try:
+            if base_url and "openrouter.ai" in str(base_url):
+                ref = (os.getenv("OPENROUTER_SITE_URL") or "").strip()
+                title = (os.getenv("OPENROUTER_APP_NAME") or "SQL Agent").strip()
+                headers = {}
+                if ref:
+                    headers["HTTP-Referer"] = ref
+                if title:
+                    headers["X-Title"] = title
+                default_headers = headers or None
+        except Exception:
+            default_headers = None
+
         return Config(
             openai_api_key=api_key,
             openai_base_url=base_url,
             openai_model=model,
+            openai_default_headers=default_headers,
             app_host=host,
             app_port=port,
             workspace_dir=workspace,
