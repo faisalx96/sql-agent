@@ -168,17 +168,53 @@
                 </button>
               </div>
             </div>
-            <div v-if="m.role==='assistant' && m.thinking" class="mb-2 rounded-md border border-slate-800 bg-slate-900/60">
-              <div class="px-3 py-2 text-xs flex items-center justify-between gap-2 border-b border-slate-800">
-                <span class="text-slate-400">Thinking</span>
-                <div class="flex items-center gap-2">
-                  <button @click="copyText(m.thinking)" class="text-xs text-slate-400 hover:text-slate-200">Copy</button>
-                  <button @click="m.thinkingExpanded = !m.thinkingExpanded" class="text-xs text-slate-400 hover:text-slate-200">{{ m.thinkingExpanded ? 'Hide' : 'Show' }}</button>
-                </div>
+            <!-- Assistant turn timeline: reasoning and tools before final content -->
+            <div v-if="m.role==='assistant' && m.timeline && m.timeline.length" class="mb-2 timeline">
+              <div v-for="(it, ti) in m.timeline" :key="ti" :class="['timeline-item', it.active ? 'active' : '']">
+                <!-- Reasoning item -->
+                <template v-if="it.type==='reasoning'">
+                  <div class="flex items-center justify-between gap-2">
+                    <button @click="it.expanded = !it.expanded" class="text-xs text-slate-300 inline-flex items-center gap-2 hover:text-slate-200">
+                      <span class="text-slate-400">Reasoning</span>
+                      <svg :class="it.expanded ? 'rotate-90' : ''" class="size-3 transition-transform" viewBox="0 0 20 20" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" d="M7.21 5.23a.75.75 0 0 1 1.06-.02l4.4 4.24a.75.75 0 0 1 0 1.08l-4.4 4.24a.75.75 0 1 1-1.04-1.08L10.585 10 7.23 6.29a.75.75 0 0 1-.02-1.06z" clip-rule="evenodd"/></svg>
+                      <span v-if="it.active" class="spinner-dot"></span>
+                    </button>
+                    <div class="text-[11px] text-slate-500">
+                      <template v-if="it.llmStart && it.llmEnd">Thought for {{ formatDurationShort(it.llmEnd - it.llmStart) }}.</template>
+                      <template v-else-if="it.active">Thinking…</template>
+                    </div>
+                  </div>
+                  <div v-show="it.expanded" :class="['mt-1 p-2 rounded border border-slate-800 bg-slate-900/60 text-xs whitespace-pre-wrap', it.active ? 'shimmer' : '']">{{ it.text }}</div>
+                </template>
+                <!-- Tool item -->
+                <template v-else-if="it.type==='tool'">
+                  <div class="flex items-center justify-between gap-2">
+                    <button @click="it.expanded = !it.expanded" class="text-xs text-slate-300 inline-flex items-center gap-2 hover:text-slate-200">
+                      <svg :class="it.expanded ? 'rotate-90' : ''" class="size-3 transition-transform" viewBox="0 0 20 20" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" d="M7.21 5.23a.75.75 0 0 1 1.06-.02l4.4 4.24a.75.75 0 0 1 0 1.08l-4.4 4.24a.75.75 0 1 1-1.04-1.08L10.585 10 7.23 6.29a.75.75 0 0 1-.02-1.06z" clip-rule="evenodd"/></svg>
+                      <span class="text-slate-400">Tool</span>
+                      <span class="font-semibold">{{ it.name }}</span>
+                      <span v-if="it.active" class="spinner-dot"></span>
+                    </button>
+                    <div class="text-[11px] text-slate-500">
+                      <template v-if="it.llmStart && it.llmEnd">LLM {{ formatDuration(it.llmEnd - it.llmStart) }}</template>
+                      <template v-if="it.start && it.end"> · Exec {{ formatDuration(it.end - it.start) }}</template>
+                      <template v-if="it.active"> · running…</template>
+                    </div>
+                  </div>
+                  <div v-show="it.expanded" class="mt-1 grid grid-cols-1 sm:grid-cols-2 gap-2 p-2 rounded border border-slate-800 bg-slate-900/60">
+                      <div>
+                        <div class="text-[11px] text-slate-400 mb-1">Input</div>
+                        <pre class="text-[11px] overflow-auto"><code class="language-json" v-html="renderCode(it.args)"></code></pre>
+                      </div>
+                      <div>
+                        <div class="text-[11px] text-slate-400 mb-1">Output</div>
+                        <pre class="text-[11px] overflow-auto"><code class="language-json" v-html="renderCode(it.result)"></code></pre>
+                      </div>
+                  </div>
+                </template>
               </div>
-              <div v-show="m.thinkingExpanded" class="p-3 text-xs whitespace-pre-wrap text-slate-300">{{ m.thinking }}</div>
             </div>
-            <div v-if="m.role==='assistant' && m.tools && m.tools.length" class="mb-3 space-y-2">
+            <div v-if="false && m.role==='assistant' && m.tools && m.tools.length" class="mb-3 space-y-2">
               <div v-for="(t, i) in m.tools" :key="i" class="rounded-md border border-slate-700 bg-slate-900/60 overflow-hidden">
                 <div class="px-3 py-2 text-xs flex items-center justify-between gap-2 border-b border-slate-800">
                   <div class="flex items-center gap-3 text-slate-300">
@@ -398,6 +434,6 @@
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.7/dist/purify.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.9.0/highlight.min.js"></script>
-    <script src="/static/app.js?v=3"></script>
+    <script src="/static/app.js?v=5"></script>
   </body>
   </html>

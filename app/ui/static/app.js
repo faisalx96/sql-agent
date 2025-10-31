@@ -285,6 +285,7 @@
         return Math.max(0, e - s);
       }
       function formatDuration(ms) { if (ms == null) return ''; if (ms < 1000) return `${Math.round(ms)} ms`; const s = ms / 1000; if (s < 10) return `${s.toFixed(2)} s`; if (s < 60) return `${s.toFixed(1)} s`; const m = Math.floor(s / 60); const rem = Math.round(s - m * 60); return `${m}m ${rem}s`; }
+      function formatDurationShort(ms) { if (ms == null) return ''; if (ms < 1000) return `${Math.round(ms)}ms`; const s = ms / 1000; if (s < 10) return `${s.toFixed(1)}s`; if (s < 60) return `${Math.round(s)}s`; const m = Math.floor(s / 60); const rem = Math.round(s - m * 60); return rem ? `${m}m ${rem}s` : `${m}m`; }
       function turnElapsed() { void tick.value; if (!streaming.value || !turnStart.value) return 0; return Date.now() - turnStart.value; }
       function formatTimeAgo(ts) { if (!ts) return ''; const s = Math.floor((Date.now() - ts) / 1000); if (s < 60) return `${s}s ago`; const m = Math.floor(s / 60); if (m < 60) return `${m}m ago`; const h = Math.floor(m / 60); if (h < 24) return `${h}h ago`; const d = Math.floor(h / 24); return `${d}d ago`; }
 
@@ -367,6 +368,13 @@
                 }));
                 pendingTools = batch;
                 upsertTools(allTools, batch);
+                // Build timeline: prior reasoning segment
+                if (!out.length || (out[out.length-1] && out[out.length-1].role !== 'assistant')) {
+                  // delay attaching to the next assistant message block
+                }
+                // Stash a pseudo message-level timeline segment for later merge
+                if (!('timelineBeforeTools' in (m))) m.timelineBeforeTools = [];
+                m.timelineBeforeTools.push({ type: 'reasoning', id: 'r-pre', active: false, text: m.thinking || '', expanded: false, llmStart: llmStart, llmEnd: llmEnd });
                 // Skip adding this intermediate assistant message
                 continue;
               }
@@ -387,7 +395,7 @@
                 continue;
               }
               if (m.role === 'assistant') {
-                const amsg = { role: 'assistant', content: m.content || '', renderRaw: false };
+                const amsg = { role: 'assistant', content: m.content || '', renderRaw: false, timeline: [] };
                 if (m.model) amsg.model = m.model; else if (model.value) amsg.model = model.value;
                 if (m.thinking) { amsg.thinking = m.thinking; amsg.thinkingExpanded = true; }
                 const attach = (allTools && allTools.length) ? allTools : pendingTools;
@@ -408,6 +416,23 @@
                     amsg.preview = { columns: o.columns, rows: o.rows, rowcount: o.rowcount };
                     amsg.previewExpanded = false;
                   }
+                }
+                // Merge any pre-tools reasoning stored on the interim assistant message
+                try {
+                  const pre = (list.find(x => x && x.tool_calls && x.timelineBeforeTools) || {}).timelineBeforeTools;
+                  if (Array.isArray(pre) && pre.length) { amsg.timeline.push(...pre.map(x => ({...x}))); }
+                } catch {}
+                // Add tool items to the timeline
+                if (amsg.tools && amsg.tools.length) {
+                  for (const t of amsg.tools) {
+                    amsg.timeline.push({ type: 'tool', id: t.id, name: t.name, args: t.arguments, active: false, llmStart: t.llmStart ?? null, llmEnd: t.llmEnd ?? null, start: t.start ?? null, end: t.end ?? null, expanded: false, result: t.output });
+                  }
+                }
+                // Add final reasoning segment if present on this assistant message (post-tools)
+                const postLlmStart = (typeof m.llm_start_ms === 'number') ? m.llm_start_ms : null;
+                const postLlmEnd = (typeof m.llm_end_ms === 'number') ? m.llm_end_ms : null;
+                if (m.thinking) {
+                  amsg.timeline.push({ type: 'reasoning', id: 'r-post', active: false, text: m.thinking, expanded: false, llmStart: postLlmStart, llmEnd: postLlmEnd });
                 }
                 if (m.duration_ms != null) amsg.totalMs = m.duration_ms;
                 out.push(amsg);
@@ -473,7 +498,7 @@
         await ensureChat();
         const userMsg = { role: 'user', content: text };
         messages.value.push(userMsg);
-        const assistantMsg = { role: 'assistant', content: '', renderRaw: false, model: model.value || undefined };
+        const assistantMsg = { role: 'assistant', content: '', renderRaw: false, model: model.value || undefined, timeline: [] };
         messages.value.push(assistantMsg);
         // If current session has no title, set one from the first user message
         const sess = sessions.value.find(s => s.id === chatId.value);
@@ -503,6 +528,16 @@
               try {
                 const evt = JSON.parse(line);
                 if (evt.type === 'tool_call') {
+                  // Finalize current reasoning segment if any
+                  try {
+                    const last = (assistantMsg.timeline||[]).slice(-1)[0];
+                    if (last && last.type === 'reasoning' && last.active) {
+                      last.active = false; last.llmStart = (typeof evt.llm_start_ms === 'number') ? evt.llm_start_ms : last.llmStart || null; last.llmEnd = (typeof evt.llm_end_ms === 'number') ? evt.llm_end_ms : Date.now();
+                    }
+                  } catch {}
+                  // Tool timeline item
+                  assistantMsg.timeline = assistantMsg.timeline || [];
+                  assistantMsg.timeline.push({ type: 'tool', id: evt.id, name: evt.name, args: evt.arguments, active: true, llmStart: (typeof evt.llm_start_ms === 'number') ? evt.llm_start_ms : null, llmEnd: (typeof evt.llm_end_ms === 'number') ? evt.llm_end_ms : null, start: null, end: null, expanded: false });
                   if (!assistantMsg.tools) assistantMsg.tools = [];
                   const existing = assistantMsg.tools.find(t => t.id === evt.id);
                   const llmStart = (typeof evt.llm_start_ms === 'number') ? evt.llm_start_ms : null;
@@ -538,24 +573,35 @@
                     const tool = existing || (assistantMsg.tools.find(t => t.id === evt.id));
                     if (tool) { tool._chartId = tool._chartId || ('chart-' + Math.random().toString(36).slice(2,9)); if (tool.expanded) { await nextTick(); renderChartForTool(tool); } }
                   }
+                  // Mark tool timeline item completed with exec timing
+                  try {
+                    const tli = (assistantMsg.timeline||[]).find(x => x && x.type==='tool' && x.id===evt.id);
+                    if (tli) { tli.active = false; tli.start = (typeof evt.start_ms==='number')?evt.start_ms:null; tli.end = (typeof evt.end_ms==='number')?evt.end_ms:null; tli.result = evt.output; }
+                  } catch {}
                   await nextTick();
                 } else if (evt.tools) {
                   assistantMsg.tools = evt.tools.map(t => ({ ...t, expanded: false }));
                   await nextTick();
                 } else if (evt.type === 'thinking' && evt.content != null) {
-                  const add = String(evt.content);
-                  if (assistantMsg.thinking) assistantMsg.thinking += add;
-                  else assistantMsg.thinking = add;
-                  assistantMsg.thinkingExpanded = true;
+                  // Live reasoning segment (collapsed by default), create if not present or last finalized
+                  assistantMsg.timeline = assistantMsg.timeline || [];
+                  let last = assistantMsg.timeline.slice(-1)[0];
+                  if (!last || last.type !== 'reasoning' || !last.active) {
+                    last = { type: 'reasoning', id: 'r'+Math.random().toString(36).slice(2,7), active: true, text: '', expanded: false, llmStart: Date.now(), llmEnd: null };
+                    assistantMsg.timeline.push(last);
+                  }
+                  last.text += String(evt.content);
                   await nextTick();
                 } else if (evt.error) {
                   assistantMsg.content += (assistantMsg.content ? '\n\n' : '') + `_(error: ${String(evt.error)})_`;
                   await nextTick();
                 } else if (evt.chunk) {
                   assistantMsg.content += evt.chunk;
+                  // If no active reasoning and no active tool, we are in final answer stream; keep as content
                   await nextTick(); scrollToBottom();
                 } else if (evt.done) {
-                  // no-op
+                  // Finalize any active reasoning with end timestamp
+                  try { const last = (assistantMsg.timeline||[]).slice(-1)[0]; if (last && last.type==='reasoning' && last.active) { last.active=false; last.llmEnd = Date.now(); } } catch {}
                 }
               } catch {}
             }
@@ -718,7 +764,7 @@
 
       function previewRowCount(preview) { if (!preview) return 0; if (preview.rowcount !== undefined && preview.rowcount !== null) return preview.rowcount; if (Array.isArray(preview.rows)) return preview.rows.length; return 0; }
 
-      return { chatId, messages, input, inputEl, streaming, model, allowedModels, loadingModels, modelOpen, modelQuery, sidebarOpen, sessions, loadingSessions, loadingChat, showSettings, settings, toasts, newChat, createChat, selectChat, renameChat, deleteChat, onSubmit, stopStreaming, retryLast, canRetry, copyText, renderMarkdown, renderCode, renderSQL, toolSummary, displayTitle, toggleTool, toolError, copyJSON, copyCSV, downloadCSV, previewRowCount, toolElapsed, llmElapsed, formatDuration, turnElapsed, sortedSessions, formatTimeAgo, autosize, saveSettings, toggleRender, applyModel, renderChartForTool, refreshModels, filteredModels, filteredHasExact, pickModel, applySearchedModel };
+      return { chatId, messages, input, inputEl, streaming, model, allowedModels, loadingModels, modelOpen, modelQuery, sidebarOpen, sessions, loadingSessions, loadingChat, showSettings, settings, toasts, newChat, createChat, selectChat, renameChat, deleteChat, onSubmit, stopStreaming, retryLast, canRetry, copyText, renderMarkdown, renderCode, renderSQL, toolSummary, displayTitle, toggleTool, toolError, copyJSON, copyCSV, downloadCSV, previewRowCount, toolElapsed, llmElapsed, formatDuration, formatDurationShort, turnElapsed, sortedSessions, formatTimeAgo, autosize, saveSettings, toggleRender, applyModel, renderChartForTool, refreshModels, filteredModels, filteredHasExact, pickModel, applySearchedModel };
     }
   }).mount('#app');
 })();

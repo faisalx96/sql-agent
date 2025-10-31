@@ -630,6 +630,42 @@ async def chat(req: Request):
                     store.append(chat_id, tool_call_msg, updated_at=int(_t.time() * 1000))
                     history.append(tool_call_msg)
 
+                    # Record LLM generation for tool call decision
+                    try:
+                        gen_name = "tool_calls:" + ",".join([
+                            (tc.get("function") or {}).get("name") or ""
+                            for tc in tool_calls_list
+                        ])
+                        trace.generation(
+                            name=(gen_name or "tool_calls"),
+                            model=current_model,
+                            input=_jsonable(req_messages),
+                            output=_jsonable(tool_calls_list),
+                            start_ms=llm_start,
+                            end_ms=llm_end,
+                            usage=None,
+                            metadata={
+                                "thinking": thinking_text or None,
+                                "finish_reason": finish_reason,
+                                "tool_calls": _jsonable(tool_calls_list),
+                                "tool_outputs": None,
+                                "tools_input": None,
+                                "request": {
+                                    "model": current_model,
+                                    "temperature": ns_kwargs.get("temperature"),
+                                    "tool_choice": ns_kwargs.get("tool_choice"),
+                                    "tools": _jsonable(tools_payload),
+                                },
+                                "raw_response": None,
+                                "assistant_message": None,
+                                "text_content": None,
+                                "duration_ms": (llm_end - llm_start) if (llm_end and llm_start) else None,
+                                "history_len": len(history or []),
+                            },
+                        )
+                    except Exception:
+                        pass
+
                     # Execute each tool and emit results
                     from .agent.tools import dispatch_tool
 
@@ -637,6 +673,27 @@ async def chat(req: Request):
                         try:
                             fname = tc["function"]["name"]
                             fargs = tc["function"]["arguments"]
+                            # Emit tool_call event to UI with LLM timing
+                            try:
+                                args = None
+                                try:
+                                    args = json.loads(fargs) if isinstance(fargs, str) else fargs
+                                except Exception:
+                                    args = fargs
+                                payload = {
+                                    "type": "tool_call",
+                                    "id": tc.get("id"),
+                                    "name": fname,
+                                    "arguments": args,
+                                    "llm_start_ms": llm_start,
+                                    "llm_end_ms": llm_end,
+                                    "llm_duration_ms": (llm_end - llm_start) if (llm_end and llm_start) else None,
+                                }
+                                if thinking_text:
+                                    payload["thinking"] = thinking_text
+                                yield orjson.dumps(payload).decode() + "\n"
+                            except Exception:
+                                pass
                             # Guard: encourage schema-first workflow
                             start_ms = int(time.time() * 1000)
                             if fname == "sql_query":
@@ -666,6 +723,21 @@ async def chat(req: Request):
                         store.append(chat_id, tool_msg, updated_at=int(time.time() * 1000))
                         history.append(tool_msg)
 
+                        # Accumulate for next generation snapshot
+                        try:
+                            executed_tools.append({
+                                "id": tc.get("id"),
+                                "name": fname,
+                                "arguments": args,
+                                "output": result,
+                                "start_ms": start_ms,
+                                "end_ms": end_ms,
+                                "duration_ms": (end_ms - start_ms),
+                                "status": "ok" if not (isinstance(result, dict) and result.get("error")) else "error",
+                            })
+                        except Exception:
+                            pass
+
                         # Send tool_result event
                         yield orjson.dumps({
                             "type": "tool_result",
@@ -688,9 +760,42 @@ async def chat(req: Request):
                     "duration_ms": duration_ms,
                     "thinking": thinking_text or None,
                     "model": current_model,
+                    "llm_start_ms": llm_start,
+                    "llm_end_ms": llm_end,
                 }
                 store.append(chat_id, final_msg, updated_at=int(time.time() * 1000))
                 history.append(final_msg)
+                # Record final assistant generation
+                try:
+                    trace.generation(
+                        name="assistant",
+                        model=current_model,
+                        input=_jsonable(req_messages),
+                        output=assistant_text,
+                        start_ms=llm_start,
+                        end_ms=llm_end,
+                        usage=None,
+                        metadata={
+                            "thinking": thinking_text or None,
+                            "finish_reason": finish_reason,
+                            "tool_calls": None,
+                            "tool_outputs": tools_input_snapshot or None,
+                            "tools_input": tools_input_snapshot or None,
+                            "request": {
+                                "model": current_model,
+                                "temperature": ns_kwargs.get("temperature"),
+                                "tool_choice": ns_kwargs.get("tool_choice"),
+                                "tools": _jsonable(tools_payload),
+                            },
+                            "raw_response": None,
+                            "assistant_message": None,
+                            "text_content": assistant_text,
+                            "duration_ms": (llm_end - llm_start) if (llm_end and llm_start) else None,
+                            "history_len": len(history or []),
+                        },
+                    )
+                except Exception:
+                    pass
                 yield orjson.dumps({"done": True}).decode() + "\n"
                 break
         except Exception as e:
