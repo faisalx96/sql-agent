@@ -706,6 +706,24 @@
         if (n === 'list_files' || n === 'read_file' || n === 'write_file' || n === 'search_files') return 'files';
         return 'other';
       }
+      function timelineToolTitle(it) {
+        if (!it) return '';
+        if (it.args && it.args.title) return String(it.args.title);
+        try {
+          if (it.name === 'sql_query' && it.args && it.args.sql) {
+            const s = String(it.args.sql).trim().replace(/\s+/g,' ');
+            return s.slice(0, 60) + (s.length > 60 ? '…' : '');
+          }
+        } catch {}
+        return (it && it.name) || 'tool';
+      }
+      function timelineToolType(it) {
+        if (!it) return 'other';
+        const n = (it && it.name) || '';
+        if (n === 'sql_query' || n === 'sql_schema') return 'sql';
+        if (n === 'list_files' || n === 'read_file' || n === 'write_file' || n === 'search_files') return 'files';
+        return 'other';
+      }
       function visibleToolsFor(m) {
         const f = m.toolFilter || 'all';
         if (!m.tools) return [];
@@ -764,7 +782,7 @@
 
       function previewRowCount(preview) { if (!preview) return 0; if (preview.rowcount !== undefined && preview.rowcount !== null) return preview.rowcount; if (Array.isArray(preview.rows)) return preview.rows.length; return 0; }
 
-      return { chatId, messages, input, inputEl, streaming, model, allowedModels, loadingModels, modelOpen, modelQuery, sidebarOpen, sessions, loadingSessions, loadingChat, showSettings, settings, toasts, newChat, createChat, selectChat, renameChat, deleteChat, onSubmit, stopStreaming, retryLast, canRetry, copyText, renderMarkdown, renderCode, renderSQL, toolSummary, displayTitle, toggleTool, toolError, copyJSON, copyCSV, downloadCSV, previewRowCount, toolElapsed, llmElapsed, formatDuration, formatDurationShort, turnElapsed, sortedSessions, formatTimeAgo, autosize, saveSettings, toggleRender, applyModel, renderChartForTool, refreshModels, filteredModels, filteredHasExact, pickModel, applySearchedModel };
+      return { chatId, messages, input, inputEl, streaming, model, allowedModels, loadingModels, modelOpen, modelQuery, sidebarOpen, sessions, loadingSessions, loadingChat, showSettings, settings, toasts, newChat, createChat, selectChat, renameChat, deleteChat, onSubmit, stopStreaming, retryLast, canRetry, copyText, renderMarkdown, renderCode, renderSQL, toolSummary, displayTitle, toggleTool, toolError, copyJSON, copyCSV, downloadCSV, previewRowCount, toolElapsed, llmElapsed, formatDuration, formatDurationShort, turnElapsed, sortedSessions, formatTimeAgo, autosize, saveSettings, toggleRender, applyModel, renderChartForTool, refreshModels, filteredModels, filteredHasExact, pickModel, applySearchedModel, timelineToolTitle, timelineToolType };
     }
   }).mount('#app');
 })();
