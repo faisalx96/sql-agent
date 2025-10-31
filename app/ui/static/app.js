@@ -30,7 +30,7 @@
       const loadingSessions = ref(false);
       const loadingChat = ref(false);
       const showSettings = ref(false);
-      const settings = ref({ theme: 'dark', previewRowsCollapsed: 10, reducedMotion: false, showThinking: true });
+      const settings = ref({ theme: 'dark', previewRowsCollapsed: 10, reducedMotion: false });
       const toasts = ref([]);
       let controller = null;
       let onKey = null;
@@ -489,7 +489,7 @@
         streaming.value = true; turnStart.value = Date.now();
         if (!tickTimer) { tickTimer = setInterval(() => { tick.value = (tick.value + 1) | 0; }, 100); }
         try {
-          const res = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chatId.value, message: text, show_thinking: !!settings.value.showThinking }), signal: controller.signal });
+          const res = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chatId.value, message: text }), signal: controller.signal });
           if (!res.ok || !res.body) {
             const msg = await res.text().catch(() => '');
             assistantMsg.content += (assistantMsg.content ? '\n\n' : '') + `_(error ${res.status}: ${msg.slice(0,200)})_`;

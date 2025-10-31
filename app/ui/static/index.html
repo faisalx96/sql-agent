@@ -168,7 +168,7 @@
                 </button>
               </div>
             </div>
-            <div v-if="m.role==='assistant' && m.thinking && settings.showThinking" class="mb-2 rounded-md border border-slate-800 bg-slate-900/60">
+            <div v-if="m.role==='assistant' && m.thinking" class="mb-2 rounded-md border border-slate-800 bg-slate-900/60">
               <div class="px-3 py-2 text-xs flex items-center justify-between gap-2 border-b border-slate-800">
                 <span class="text-slate-400">Thinking</span>
                 <div class="flex items-center gap-2">
@@ -209,7 +209,7 @@
                 </div>
                 <div v-show="t.expanded" class="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3">
                   <!-- Reasoning per tool (optional) -->
-                  <div v-if="settings.showThinking && t.thinking" class="sm:col-span-2">
+                  <div v-if="t.thinking" class="sm:col-span-2">
                     <div class="text-xs text-slate-400 mb-1">Reasoning</div>
                     <div class="text-xs text-slate-300 whitespace-pre-wrap p-2 rounded-md border border-slate-800 bg-slate-950/60">{{ t.thinking }}</div>
                   </div>
@@ -382,7 +382,7 @@
               <label class="inline-flex items-center gap-2"><input type="checkbox" v-model="settings.reducedMotion"> Reduce motion</label>
             </div>
             <div>
-              <label class="inline-flex items-center gap-2"><input type="checkbox" v-model="settings.showThinking"> Show thinking (if available)</label>
+              
             </div>
           </div>
           <div class="mt-4 flex justify-end gap-2">

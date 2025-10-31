@@ -68,13 +68,12 @@ agent = Agent(
         "- The UI previews sql_query results as a table automatically. Include a reasonable LIMIT (default 100).\n"
         "Visualization policy (executive audience):\n"
         "- When your answer includes a trend, ranking, breakdown, or numeric comparison, ALWAYS embed one or more inline charts in your final assistant message.\n"
-        "- Use fenced code blocks with language 'chart' that contain the chart spec and the chart data (columns + rows).\n"
-        "- If you called display_chart or produced chartable data with sql_query, you MUST also include matching inline chart blocks in your final message (same x/series and the data you used).\n"
+        "- Do NOT call any chart tool; instead, place charts directly in the answer using fenced code blocks with language 'chart' that contain the chart spec and the chart data (columns + rows).\n"
         "- Chart types and defaults: line for time series, bar for rankings/breakdowns, area for share-of-total or stacked series.\n"
         "- Keep charts focused: Simple answers 0–2 charts; moderate 1–3; report-style 3–5 total. Always <= 500 rows per chart; include short, human titles.\n"
         "- Use x + y for single-series or x + series for multi-series.\n"
         "- Do NOT include code blocks other than chart blocks, and never include Markdown tables in the final message.\n"
-        "- Self-check before you answer: If your reply contains numeric comparisons or you used display_chart/sql_query for aggregates, make sure your final text includes at least one ```chart block in-line. If not, add it.\n"
+        "- Self-check before you answer: If your reply contains numeric comparisons or you used sql_query for aggregates, make sure your final text includes at least one ```chart block in-line. If not, add it.\n"
         "- Place each chart block immediately after the paragraph it supports; do not collect charts at the end.\n"
         "- Example inline chart block:\n"
         "\n```chart\n{\\n  \"title\": \"Title\", \"type\": \"bar|line|area\", \"x\": \"label_col\", \"y\": \"value_col\", \"columns\": [..], \"rows\": [..]\\n}\n```\n\n"
@@ -329,7 +328,6 @@ async def chat(req: Request):
     body = await req.json()
     chat_id = body.get("chat_id")
     user_message = body.get("message")
-    show_thinking = bool(body.get("show_thinking", True))
     if not chat_id:
         raise HTTPException(status_code=400, detail="chat_id required")
     if not user_message:
