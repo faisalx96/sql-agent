@@ -84,44 +84,39 @@
               </div>
             </div>
           </div>
-          <div class="flex items-center gap-2">
-            <div class="flex items-center gap-1 text-xs text-slate-400">
-              <span>Model:</span>
-              <div class="relative">
-                <button type="button" @click="modelOpen = !modelOpen" class="text-left min-w-56 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 focus:outline-none focus:border-sky-600">
-                  <span class="truncate inline-block max-w-60 align-middle">{{ model || 'Select model' }}</span>
-                  <svg class="size-4 inline-block float-right opacity-70" viewBox="0 0 20 20" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.085l3.71-3.854a.75.75 0 111.08 1.04l-4.24 4.4a.75.75 0 01-1.08 0l-4.24-4.4a.75.75 0 01.02-1.06z" clip-rule="evenodd"/></svg>
-                </button>
-                <div v-show="modelOpen" class="absolute z-50 mt-1 w-80 rounded-md border bg-slate-900 border-slate-700 shadow-xl">
-                  <div class="p-2 border-b border-slate-800">
-                    <input type="text" v-model="modelQuery" @keydown.enter.stop.prevent="applySearchedModel" placeholder="Search or paste model ID" class="w-full px-2 py-1 rounded bg-slate-950 border border-slate-800 focus:outline-none focus:border-sky-600" />
-                  </div>
-                  <div class="max-h-72 overflow-auto p-1">
-                    <div v-if="loadingModels" class="p-2 text-xs text-slate-400">Loading models…</div>
-                    <template v-else>
-                      <button v-for="m in filteredModels()" :key="m" @click="pickModel(m)" class="block w-full text-left px-2 py-1.5 text-sm rounded hover:bg-slate-800/60 focus:bg-slate-800/60">{{ m }}</button>
-                      <button v-if="modelQuery && !filteredHasExact()" @click="pickModel(modelQuery)" class="block w-full text-left px-2 py-1.5 text-sm rounded hover:bg-slate-800/60 focus:bg-slate-800/60 text-slate-300">Use "{{ modelQuery }}"</button>
-                    </template>
-                  </div>
-                  <div class="p-1 border-t border-slate-800 flex items-center justify-between gap-2 text-xs text-slate-400">
-                    <button @click="refreshModels" class="px-2 py-1 rounded border border-slate-700 hover:border-slate-600">Reload</button>
-                    <button @click="modelOpen=false" class="px-2 py-1 rounded border border-slate-700 hover:border-slate-600">Close</button>
-                  </div>
+          <div class="flex items-center gap-3">
+            <div class="relative">
+              <button type="button" @click="modelOpen = !modelOpen" class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800/60 border border-slate-700/50 hover:border-slate-600 hover:bg-slate-800 text-sm text-slate-200 transition-colors focus:outline-none focus:ring-2 focus:ring-sky-500/50">
+                <svg class="size-4 text-slate-400" viewBox="0 0 20 20" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M10 9a2 2 0 100-4 2 2 0 000 4zM10 13a4 4 0 100-8 4 4 0 000 8zM10 17c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
+                <span class="truncate max-w-[200px]">{{ model || 'Select model' }}</span>
+                <svg :class="modelOpen ? 'rotate-180' : ''" class="size-4 text-slate-400 transition-transform" viewBox="0 0 20 20" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.085l3.71-3.854a.75.75 0 111.08 1.04l-4.24 4.4a.75.75 0 01-1.08 0l-4.24-4.4a.75.75 0 01.02-1.06z" clip-rule="evenodd"/></svg>
+              </button>
+              <div v-show="modelOpen" class="absolute z-50 mt-2 w-80 rounded-lg border bg-slate-900 border-slate-700 shadow-xl">
+                <div class="p-2 border-b border-slate-800">
+                  <input type="text" v-model="modelQuery" @keydown.enter.stop.prevent="applySearchedModel" placeholder="Search or paste model ID" class="w-full px-2 py-1.5 rounded-md bg-slate-950 border border-slate-800 focus:outline-none focus:border-sky-600 text-sm" />
+                </div>
+                <div class="max-h-72 overflow-auto p-1">
+                  <div v-if="loadingModels" class="p-2 text-xs text-slate-400">Loading models…</div>
+                  <template v-else>
+                    <button v-for="m in filteredModels()" :key="m" @click="pickModel(m)" class="block w-full text-left px-2 py-1.5 text-sm rounded-md hover:bg-slate-800/60 focus:bg-slate-800/60 text-slate-200">{{ m }}</button>
+                    <button v-if="modelQuery && !filteredHasExact()" @click="pickModel(modelQuery)" class="block w-full text-left px-2 py-1.5 text-sm rounded-md hover:bg-slate-800/60 focus:bg-slate-800/60 text-slate-300">Use "{{ modelQuery }}"</button>
+                  </template>
+                </div>
+                <div class="p-1 border-t border-slate-800 flex items-center justify-between gap-2 text-xs text-slate-400">
+                  <button @click="refreshModels" class="px-2 py-1 rounded-md border border-slate-700 hover:border-slate-600">Reload</button>
+                  <button @click="modelOpen=false" class="px-2 py-1 rounded-md border border-slate-700 hover:border-slate-600">Close</button>
                 </div>
               </div>
             </div>
-            <button title="Settings" @click="showSettings=true" class="px-2 py-1 rounded-md bg-slate-800 border border-slate-700 hover:border-slate-600 text-sm transition-colors">
-              <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06c.48.48 1.18.62 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09c0 .65.38 1.24.97 1.52.64.3 1.34.15 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c0 .65.38 1.24.97 1.52.64.3 1.34.15 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-1.82.33Z"/></svg>
-            </button>
-            <button v-if="!streaming" @click="createChat" class="px-3 py-1.5 rounded-md bg-slate-800 border border-slate-700 hover:border-slate-600 text-sm transition-colors inline-flex items-center gap-1">
+            <button v-if="!streaming" @click="createChat" class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-sm font-medium text-white transition-colors shadow-sm shadow-sky-500/20">
               <svg class="size-4" viewBox="0 0 20 20" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M10 4a1 1 0 011 1v4h4a1 1 0 110 2h-4v4a1 1 0 11-2 0v-4H5a1 1 0 110-2h4V5a1 1 0 011-1z"/></svg>
               New
             </button>
-            <button v-if="streaming" @click="stopStreaming" class="px-3 py-1.5 rounded-md bg-red-600/80 hover:bg-red-500 text-sm transition-colors inline-flex items-center gap-1">
+            <button v-if="streaming" @click="stopStreaming" class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-sm font-medium text-white transition-colors">
               <svg class="size-4" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><rect x="6" y="6" width="12" height="12"/></svg>
               Stop
             </button>
-            <button :disabled="!canRetry" @click="retryLast" class="px-3 py-1.5 rounded-md bg-slate-800 border border-slate-700 hover:border-slate-600 disabled:opacity-50 text-sm transition-colors inline-flex items-center gap-1">
+            <button :disabled="!canRetry" @click="retryLast" class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800/60 border border-slate-700/50 hover:border-slate-600 hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed text-sm text-slate-200 transition-colors">
               <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9"/><path d="M3 3v6h6"/></svg>
               Retry
             </button>
@@ -170,7 +165,6 @@
                 <!-- Reasoning item -->
                 <template v-if="it.type==='reasoning'">
                   <div class="flex items-center gap-2">
-                    <span v-if="it.active" class="spinner-dot"></span>
                     <button @click="it.expanded = !it.expanded" class="flex items-center gap-2 text-left hover:text-slate-200 bg-transparent border-none p-0 cursor-pointer focus:outline-none">
                       <span class="text-xs text-slate-300">
                         <template v-if="it.active">Thinking…</template>
@@ -185,10 +179,19 @@
                   </div>
                   <div v-show="it.expanded" :class="['mt-1 p-2 rounded border border-slate-800 bg-slate-900/60 text-xs whitespace-pre-wrap', it.active ? 'shimmer' : '']">{{ it.text }}</div>
                 </template>
+                <!-- Content item (non-streaming, pre-tool narrative) -->
+                <template v-else-if="it.type==='content'">
+                  <div class="flex items-center gap-2">
+                    <button @click="it.expanded = !it.expanded" class="flex items-center gap-2 text-left hover:text-slate-200 bg-transparent border-none p-0 cursor-pointer focus:outline-none">
+                      <span class="text-xs text-slate-300">Step</span>
+                      <svg :class="it.expanded ? 'rotate-90' : ''" class="size-3 text-slate-400 transition-transform" viewBox="0 0 20 20" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" d="M7.21 5.23a.75.75 0 0 1 1.06-.02l4.4 4.24a.75.75 0 0 1 0 1.08l-4.4 4.24a.75.75 0 1 1-1.04-1.08L10.585 10 7.23 6.29a.75.75 0 0 1-.02-1.06z" clip-rule="evenodd"/></svg>
+                    </button>
+                  </div>
+                  <div v-show="it.expanded" class="mt-1 p-2 rounded border border-slate-800 bg-slate-900/60 text-xs whitespace-pre-wrap">{{ it.text }}</div>
+                </template>
                 <!-- Tool item -->
                 <template v-else-if="it.type==='tool'">
                   <div class="flex items-center gap-2">
-                    <span v-if="it.active" class="spinner-dot"></span>
                     <button @click="it.expanded = !it.expanded" class="flex items-center gap-2 text-left hover:text-slate-200 bg-transparent border-none p-0 cursor-pointer focus:outline-none">
                       <span class="text-xs text-slate-300">{{ timelineToolTitle(it) }}</span>
                       <span :class="['inline-flex items-center justify-center px-1.5 py-0.5 rounded text-[10px] font-medium', timelineToolType(it) === 'sql' ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30' : timelineToolType(it) === 'files' ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' : 'bg-slate-700/50 text-slate-300 border border-slate-600/50']">
@@ -197,22 +200,127 @@
                         <template v-else>TOOL</template>
                       </span>
                       <span class="text-[11px] text-slate-500">
-                        <template v-if="it.llmStart && it.llmEnd">LLM {{ formatDuration(it.llmEnd - it.llmStart) }}</template>
-                        <template v-if="it.start && it.end"> · Exec {{ formatDuration(it.end - it.start) }}</template>
-                        <template v-if="it.active"> · running…</template>
+                        <template v-if="it.active">running…</template>
+                        <template v-else-if="it.llmStart && it.llmEnd && it.start && it.end">{{ formatDurationShort((it.llmEnd - it.llmStart) + (it.end - it.start)) }}</template>
+                        <template v-else-if="it.llmStart && it.llmEnd">{{ formatDurationShort(it.llmEnd - it.llmStart) }}</template>
+                        <template v-else-if="it.start && it.end">{{ formatDurationShort(it.end - it.start) }}</template>
                       </span>
                       <svg :class="it.expanded ? 'rotate-90' : ''" class="size-3 text-slate-400 transition-transform" viewBox="0 0 20 20" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" d="M7.21 5.23a.75.75 0 0 1 1.06-.02l4.4 4.24a.75.75 0 0 1 0 1.08l-4.4 4.24a.75.75 0 1 1-1.04-1.08L10.585 10 7.23 6.29a.75.75 0 0 1-.02-1.06z" clip-rule="evenodd"/></svg>
                     </button>
                   </div>
-                  <div v-show="it.expanded" class="mt-1 grid grid-cols-1 sm:grid-cols-2 gap-2 p-2 rounded border border-slate-800 bg-slate-900/60">
-                      <div>
-                        <div class="text-[11px] text-slate-400 mb-1">Input</div>
-                        <pre class="text-[11px] overflow-auto"><code class="language-json" v-html="renderCode(it.args)"></code></pre>
+                  <div v-show="it.expanded" class="mt-1 rounded border border-slate-800 bg-slate-900/60">
+                    <div v-if="(it.llmStart && it.llmEnd) || (it.start && it.end)" class="px-3 py-2 border-b border-slate-800">
+                      <div class="text-[11px] text-slate-400 mb-1">Timing</div>
+                      <div class="text-xs text-slate-300">
+                        <template v-if="it.llmStart && it.llmEnd">LLM {{ formatDuration(it.llmEnd - it.llmStart) }}</template>
+                        <template v-if="it.start && it.end">
+                          <template v-if="it.llmStart && it.llmEnd"> · </template>Exec {{ formatDuration(it.end - it.start) }}
+                        </template>
+                        <template v-if="it.llmStart && it.llmEnd && it.start && it.end">
+                          <span class="text-slate-500"> · Total {{ formatDuration((it.llmEnd - it.llmStart) + (it.end - it.start)) }}</span>
+                        </template>
                       </div>
-                      <div>
-                        <div class="text-[11px] text-slate-400 mb-1">Output</div>
-                        <pre class="text-[11px] overflow-auto"><code class="language-json" v-html="renderCode(it.result)"></code></pre>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 p-2">
+                      <div v-if="it.thinking" class="sm:col-span-2">
+                        <div class="text-[11px] text-slate-400 mb-1">Reasoning</div>
+                        <div class="text-xs text-slate-300 whitespace-pre-wrap p-2 rounded-md border border-slate-800 bg-slate-950/60">{{ it.thinking }}</div>
                       </div>
+                      <!-- Pretty SQL + results for sql_query -->
+                      <template v-if="it.name==='sql_query'">
+                        <div v-if="it.args && it.args.sql" class="sm:col-span-2 mb-2">
+                          <div class="flex items-center justify-between mb-1">
+                            <div class="text-xs text-slate-400">SQL</div>
+                            <button @click="copyText(it.args.sql)" class="text-xs text-slate-400 hover:text-slate-200 inline-flex items-center gap-1 transition-colors">
+                              <svg class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                              Copy
+                            </button>
+                          </div>
+                          <div class="rounded-lg border border-slate-800 bg-slate-950/60 overflow-hidden">
+                            <pre class="text-xs p-3 overflow-auto"><code class="language-sql" v-html="renderSQL(it.args.sql)"></code></pre>
+                          </div>
+                        </div>
+                        <div v-if="it.result && it.result.columns && it.result.rows" class="sm:col-span-2 rounded-lg border border-slate-800 overflow-hidden bg-slate-950/60">
+                          <div class="px-3 py-2.5 flex items-center justify-between gap-2 bg-slate-900/80 border-b border-slate-800">
+                            <div class="text-xs text-slate-200 font-medium">Query result <span class="text-slate-400 font-normal">— {{ it.result.rowcount ?? (it.result.rows.length) }} rows</span></div>
+                            <div class="flex items-center gap-2">
+                              <button @click="copyCSV({columns: it.result.columns, rows: it.result.rows})" class="text-xs text-slate-400 hover:text-slate-200 transition-colors">Copy CSV</button>
+                              <button @click="downloadCSV({columns: it.result.columns, rows: it.result.rows})" class="text-xs text-slate-400 hover:text-slate-200 transition-colors">Download</button>
+                            </div>
+                          </div>
+                          <div class="overflow-auto">
+                            <table class="w-full text-sm">
+                              <thead>
+                                <tr>
+                                  <th v-for="(c, ci) in it.result.columns" :key="ci" class="text-left px-3 py-2 border-b border-slate-800 bg-slate-900/80 text-xs text-slate-300 font-medium">{{ c }}</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                <tr v-for="(r, ri) in it.result.rows.slice(0, settings.previewRowsCollapsed)" :key="ri" class="border-b border-slate-900/50 hover:bg-slate-900/30">
+                                  <td v-for="(c, ci) in it.result.columns" :key="ci" class="px-3 py-2 whitespace-nowrap text-slate-200">{{ r[ci] }}</td>
+                                </tr>
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      </template>
+                      <!-- Pretty schema output for sql_schema: show only output -->
+                      <template v-else-if="it.name==='sql_schema'">
+                        <div class="sm:col-span-2">
+                          <div class="flex items-center justify-between mb-1">
+                            <div class="text-xs text-slate-400">Schema</div>
+                            <div class="text-[11px] text-slate-500">
+                              <template v-if="it.result && it.result.tables">{{ it.result.tables.length }} tables</template>
+                            </div>
+                          </div>
+                          <div class="space-y-2">
+                            <div v-for="(tbl, ti) in (it.result && it.result.tables) || []" :key="ti" class="rounded-md border border-slate-800 bg-slate-950/60 overflow-hidden">
+                              <div class="px-3 py-2 text-xs flex items-center justify-between gap-2 bg-slate-900/60 border-b border-slate-800">
+                                <div class="text-slate-300 font-medium">{{ tbl.name }}</div>
+                                <div class="text-slate-400">{{ (tbl.row_count ?? '—') }} rows</div>
+                              </div>
+                              <div class="overflow-auto">
+                                <table class="w-full text-[11px]">
+                                  <thead>
+                                    <tr class="bg-slate-900/70">
+                                      <th class="text-left px-3 py-2 border-b border-slate-800">Column</th>
+                                      <th class="text-left px-3 py-2 border-b border-slate-800">Type</th>
+                                      <th class="text-left px-3 py-2 border-b border-slate-800">PK</th>
+                                      <th class="text-left px-3 py-2 border-b border-slate-800">Not null</th>
+                                      <th class="text-left px-3 py-2 border-b border-slate-800">Default</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    <tr v-for="(col, ci) in tbl.columns || []" :key="ci" class="border-b border-slate-900/50">
+                                      <td class="px-3 py-1.5 whitespace-nowrap text-slate-200">{{ col.name }}</td>
+                                      <td class="px-3 py-1.5 whitespace-nowrap text-slate-300">{{ col.type || '' }}</td>
+                                      <td class="px-3 py-1.5 whitespace-nowrap">
+                                        <span v-if="col.pk" class="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-300">PK</span>
+                                      </td>
+                                      <td class="px-3 py-1.5 whitespace-nowrap">
+                                        <span v-if="col.notnull" class="inline-flex items-center px-1.5 py-0.5 rounded bg-sky-500/20 border border-sky-500/40 text-sky-300">NOT NULL</span>
+                                      </td>
+                                      <td class="px-3 py-1.5 whitespace-nowrap text-slate-400">{{ col.default ?? '' }}</td>
+                                    </tr>
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </template>
+                      <!-- Default: generic input/output JSON -->
+                      <template v-else>
+                        <div>
+                          <div class="text-[11px] text-slate-400 mb-1">Input</div>
+                          <pre class="text-[11px] overflow-auto"><code class="language-json" v-html="renderCode(it.args)"></code></pre>
+                        </div>
+                        <div>
+                          <div class="text-[11px] text-slate-400 mb-1">Output</div>
+                          <pre class="text-[11px] overflow-auto"><code class="language-json" v-html="renderCode(it.result)"></code></pre>
+                        </div>
+                      </template>
+                    </div>
                   </div>
                 </template>
               </div>
@@ -286,6 +394,52 @@
                             </tr>
                           </tbody>
                         </table>
+                      </div>
+                    </div>
+                  </template>
+
+                  <!-- Pretty schema output for sql_schema: show only output -->
+                  <template v-else-if="t.name==='sql_schema'">
+                    <div class="sm:col-span-2">
+                      <div class="flex items-center justify-between mb-1">
+                        <div class="text-xs text-slate-400">Schema</div>
+                        <div class="text-[11px] text-slate-500">
+                          <template v-if="t.output && t.output.tables">{{ t.output.tables.length }} tables</template>
+                        </div>
+                      </div>
+                      <div class="space-y-2">
+                        <div v-for="(tbl, ti) in (t.output && t.output.tables) || []" :key="ti" class="rounded-md border border-slate-800 bg-slate-950/60 overflow-hidden">
+                          <div class="px-3 py-2 text-xs flex items-center justify-between gap-2 bg-slate-900/60 border-b border-slate-800">
+                            <div class="text-slate-300 font-medium">{{ tbl.name }}</div>
+                            <div class="text-slate-400">{{ (tbl.row_count ?? '—') }} rows</div>
+                          </div>
+                          <div class="overflow-auto">
+                            <table class="w-full text-[11px]">
+                              <thead>
+                                <tr class="bg-slate-900/70">
+                                  <th class="text-left px-3 py-2 border-b border-slate-800">Column</th>
+                                  <th class="text-left px-3 py-2 border-b border-slate-800">Type</th>
+                                  <th class="text-left px-3 py-2 border-b border-slate-800">PK</th>
+                                  <th class="text-left px-3 py-2 border-b border-slate-800">Not null</th>
+                                  <th class="text-left px-3 py-2 border-b border-slate-800">Default</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                <tr v-for="(col, ci) in tbl.columns || []" :key="ci" class="border-b border-slate-900/50">
+                                  <td class="px-3 py-1.5 whitespace-nowrap text-slate-200">{{ col.name }}</td>
+                                  <td class="px-3 py-1.5 whitespace-nowrap text-slate-300">{{ col.type || '' }}</td>
+                                  <td class="px-3 py-1.5 whitespace-nowrap">
+                                    <span v-if="col.pk" class="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-300">PK</span>
+                                  </td>
+                                  <td class="px-3 py-1.5 whitespace-nowrap">
+                                    <span v-if="col.notnull" class="inline-flex items-center px-1.5 py-0.5 rounded bg-sky-500/20 border border-sky-500/40 text-sky-300">NOT NULL</span>
+                                  </td>
+                                  <td class="px-3 py-1.5 whitespace-nowrap text-slate-400">{{ col.default ?? '' }}</td>
+                                </tr>
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </template>
@@ -376,7 +530,7 @@
                   </table>
                 </div>
               </div>
-            <div v-if="m.role==='assistant'" :id="'msg-content-'+idx" class="prose prose-invert max-w-none message-content" v-html="renderMarkdown(m.content)"></div>
+            <div v-if="m.role==='assistant'" :id="'msg-content-'+idx" class="prose prose-invert max-w-none message-content" v-html="renderMarkdown(displayContent(m))"></div>
             <div v-else class="whitespace-pre-wrap">{{ m.content }}</div>
             </div>
           </div>
@@ -398,39 +552,6 @@
         <div v-for="t in toasts" :key="t.id" class="px-3 py-2 rounded-md bg-slate-800/90 border border-slate-700 text-sm">{{ t.msg }}</div>
       </div>
 
-      <!-- Settings Modal -->
-      <div v-if="showSettings" class="fixed inset-0 z-50 flex items-center justify-center">
-        <div class="absolute inset-0 bg-black/50" @click="showSettings=false"></div>
-        <div class="relative w-full max-w-md rounded-xl border border-slate-800 bg-slate-900 p-4 shadow-xl">
-          <div class="flex items-center justify-between mb-2">
-            <h3 class="m-0 text-base font-semibold">Settings</h3>
-            <button @click="showSettings=false" class="text-slate-400 hover:text-slate-200">✕</button>
-          </div>
-          <div class="space-y-4 text-sm">
-            <div>
-              <div class="mb-1 text-slate-400">Theme</div>
-              <div class="flex gap-2">
-                <label class="inline-flex items-center gap-1"><input type="radio" name="theme" value="dark" v-model="settings.theme"> <span>Dark</span></label>
-                <label class="inline-flex items-center gap-1"><input type="radio" name="theme" value="light" v-model="settings.theme"> <span>Light</span></label>
-              </div>
-            </div>
-            <div>
-              <div class="mb-1 text-slate-400">Preview rows (collapsed)</div>
-              <input type="number" min="5" max="100" v-model.number="settings.previewRowsCollapsed" class="w-24 px-2 py-1 rounded-md bg-slate-950 border border-slate-800" />
-            </div>
-            <div>
-              <label class="inline-flex items-center gap-2"><input type="checkbox" v-model="settings.reducedMotion"> Reduce motion</label>
-            </div>
-            <div>
-              
-            </div>
-          </div>
-          <div class="mt-4 flex justify-end gap-2">
-            <button @click="showSettings=false" class="px-3 py-1.5 rounded-md bg-slate-800 border border-slate-700 hover:border-slate-600 text-sm transition-colors">Close</button>
-            <button @click="saveSettings(); showSettings=false" class="px-3 py-1.5 rounded-md bg-sky-600 hover:bg-sky-500 text-sm transition-colors">Save</button>
-          </div>
-        </div>
-      </div>
       
     </div>
     
@@ -438,6 +559,6 @@
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.7/dist/purify.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.9.0/highlight.min.js"></script>
-    <script src="/static/app.js?v=5"></script>
+    <script src="/static/app.js?v=9"></script>
   </body>
   </html>

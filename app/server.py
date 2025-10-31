@@ -467,6 +467,7 @@ async def chat(req: Request):
                     nonlocal llm_start
                     try:
                         stream = agent.client.chat.completions.create(stream=True, **ns_kwargs)
+                        sent_tool_calls: set[int] = set()
                         for chunk in stream:  # type: ignore
                             try:
                                 chs = getattr(chunk, "choices", None) or []
@@ -541,6 +542,27 @@ async def chat(req: Request):
                                                 except Exception:
                                                     pass
                                             state_box.setdefault("tool_calls_state", {})[idx] = st
+                                            # Emit early tool_call event for UI streaming (best-effort; args may be partial)
+                                            if idx not in sent_tool_calls and st.get("name"):
+                                                try:
+                                                    args = st.get("arguments")
+                                                    try:
+                                                        parsed_args = json.loads(args) if isinstance(args, str) else args
+                                                    except Exception:
+                                                        parsed_args = args  # may be partial JSON
+                                                    payload = {
+                                                        "type": "tool_call",
+                                                        "id": st.get("id") or f"call_{idx}",
+                                                        "name": st.get("name"),
+                                                        "arguments": parsed_args,
+                                                        "llm_start_ms": llm_start,
+                                                        "llm_end_ms": None,
+                                                    }
+                                                    out_q.put(orjson.dumps(payload).decode() + "\n")
+                                                    sent_tool_calls.add(idx)
+                                                    state_box["tool_calls_emitted"] = True
+                                                except Exception:
+                                                    pass
                                     except Exception:
                                         pass
                             except Exception:
@@ -630,17 +652,24 @@ async def chat(req: Request):
                     store.append(chat_id, tool_call_msg, updated_at=int(_t.time() * 1000))
                     history.append(tool_call_msg)
 
-                    # Record LLM generation for tool call decision
+                    # Record LLM generation for tool call decision (output = raw LLM text)
                     try:
                         gen_name = "tool_calls:" + ",".join([
                             (tc.get("function") or {}).get("name") or ""
                             for tc in tool_calls_list
                         ])
+                        # For tool_call decisions, record full assistant message structure
+                        full_msg = {
+                            "role": "assistant",
+                            "content": assistant_text,
+                            "tool_calls": tool_calls_list,
+                            "thinking": thinking_text or None,
+                        }
                         trace.generation(
                             name=(gen_name or "tool_calls"),
                             model=current_model,
                             input=_jsonable(req_messages),
-                            output=_jsonable(tool_calls_list),
+                            output=_jsonable(full_msg),
                             start_ms=llm_start,
                             end_ms=llm_end,
                             usage=None,
@@ -656,9 +685,9 @@ async def chat(req: Request):
                                     "tool_choice": ns_kwargs.get("tool_choice"),
                                     "tools": _jsonable(tools_payload),
                                 },
-                                "raw_response": None,
-                                "assistant_message": None,
-                                "text_content": None,
+                                "raw_response": _jsonable(full_msg),
+                                "assistant_message": _jsonable(full_msg),
+                                "text_content": assistant_text,
                                 "duration_ms": (llm_end - llm_start) if (llm_end and llm_start) else None,
                                 "history_len": len(history or []),
                             },
@@ -673,7 +702,7 @@ async def chat(req: Request):
                         try:
                             fname = tc["function"]["name"]
                             fargs = tc["function"]["arguments"]
-                            # Emit tool_call event to UI with LLM timing
+                            # Emit tool_call event to UI with full, final args (may duplicate early hint; UI merges by id)
                             try:
                                 args = None
                                 try:
