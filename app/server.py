@@ -438,9 +438,8 @@ async def chat(req: Request):
                     if m:
                         current_model = str(m)
 
-                # Non-streaming request to OpenAI (org-friendly)
+                # Provider streaming (via OpenAI SDK; compatible with OpenRouter). Fallback to non-streaming if rejected.
                 lower_model = str(current_model).lower()
-                # Snapshot tools executed since the previous model call; attach to next generation
                 tools_input_snapshot = executed_tools[:] if executed_tools else []
                 executed_tools = []
                 req_messages = agent.build_messages(history)
@@ -453,230 +452,155 @@ async def chat(req: Request):
                 if not lower_model.startswith("gpt-5"):
                     ns_kwargs["temperature"] = 0.2
 
+                assistant_text = ""
+                thinking_text = ""
+                tool_calls_state: Dict[int, Dict[str, Any]] = {}
+                finish_reason = None
                 llm_start = int(time.time() * 1000)
-                resp = agent.client.chat.completions.create(**ns_kwargs)
-                llm_end = int(time.time() * 1000)
-                choice = resp.choices[0]
-                msg = choice.message
-                thinking_text = extract_thinking_from_message(msg) or ""
-                # Always allow thinking when present; UI controls visibility
-                allow_thinking = True
-                if thinking_text and allow_thinking:
-                    yield orjson.dumps({"type": "thinking", "content": thinking_text}).decode() + "\n"
+                llm_end: int | None = None
+                import threading, queue as _q, time as _t
+                out_q: _q.Queue[str] = _q.Queue()
 
-                # Record LLM generation
-                usage_dict: Dict[str, Any] | None = None
-                try:
-                    u = getattr(resp, "usage", None)
-                    if u:
-                        # Compatible with both dict-like and object-like usage
-                        usage_dict = {
-                            k: getattr(u, k)
-                            for k in ("prompt_tokens", "completion_tokens", "total_tokens")
-                            if getattr(u, k, None) is not None
-                        }
-                except Exception:
-                    usage_dict = None
-                try:
-                    # Single consolidated generation node with full context
-                    tool_calls_serialized = [
-                        getattr(tc, "model_dump", lambda: getattr(tc, "__dict__", {}))()
-                        for tc in (msg.tool_calls or [])
-                    ] if getattr(msg, "tool_calls", None) else None
+                state_box: Dict[str, Any] = {"assistant_text": "", "thinking_text": "", "tool_calls_state": {}, "finish_reason": None, "llm_end": None, "fallback": False, "error": None}
 
-                    # Name the generation by tool call(s) when present for clarity
-                    if tool_calls_serialized:
-                        names = []
-                        try:
-                            for t in tool_calls_serialized:
-                                fn = (t.get("function") or {}).get("name") if isinstance(t, dict) else None
-                                if fn:
-                                    names.append(str(fn))
-                        except Exception:
-                            pass
-                        gen_name = (
-                            f"tool_call:{names[0]}" if len(names) == 1 else ("tool_calls:" + ",".join(names) if names else "tool_calls")
-                        )
-                        gen_output = tool_calls_serialized
-                    else:
-                        gen_name = "assistant"
-                        gen_output = getattr(msg, "content", None)
+                def _producer():
+                    nonlocal llm_start
+                    try:
+                        stream = agent.client.chat.completions.create(stream=True, **ns_kwargs)
+                        for chunk in stream:  # type: ignore
+                            try:
+                                chs = getattr(chunk, "choices", None) or []
+                                if not chs:
+                                    continue
+                                c0 = chs[0]
+                                delta = getattr(c0, "delta", None)
+                                if getattr(c0, "finish_reason", None):
+                                    state_box["finish_reason"] = getattr(c0, "finish_reason", None)
+                                if delta is None:
+                                    continue
+                                piece = getattr(delta, "content", None)
+                                if isinstance(piece, str) and piece:
+                                    state_box["assistant_text"] += piece
+                                    out_q.put(orjson.dumps({"chunk": piece}).decode() + "\n")
+                                elif isinstance(piece, list):
+                                    for blk in piece:
+                                        try:
+                                            btype = blk.get("type") if isinstance(blk, dict) else getattr(blk, "type", None)
+                                            if btype in ("reasoning", "thinking"):
+                                                txt = blk.get("text") if isinstance(blk, dict) else getattr(blk, "text", None)
+                                                if txt:
+                                                    state_box["thinking_text"] += str(txt)
+                                                    out_q.put(orjson.dumps({"type": "thinking", "content": str(txt)}).decode() + "\n")
+                                            else:
+                                                txt = blk.get("text") if isinstance(blk, dict) else getattr(blk, "text", None)
+                                                if txt:
+                                                    state_box["assistant_text"] += str(txt)
+                                                    out_q.put(orjson.dumps({"chunk": str(txt)}).decode() + "\n")
+                                        except Exception:
+                                            pass
+                                r = getattr(delta, "reasoning", None)
+                                if r:
+                                    try:
+                                        if isinstance(r, str):
+                                            state_box["thinking_text"] += r
+                                            out_q.put(orjson.dumps({"type": "thinking", "content": r}).decode() + "\n")
+                                        elif isinstance(r, dict):
+                                            for key in ("text", "content", "output_text"):
+                                                if r.get(key):
+                                                    state_box["thinking_text"] += str(r.get(key))
+                                                    out_q.put(orjson.dumps({"type": "thinking", "content": str(r.get(key))}).decode() + "\n")
+                                                    break
+                                    except Exception:
+                                        pass
+                                tcd = getattr(delta, "tool_calls", None)
+                                if tcd:
+                                    try:
+                                        for i, tc in enumerate(tcd):
+                                            idx = getattr(tc, "index", None)
+                                            if idx is None:
+                                                idx = i
+                                            st = state_box["tool_calls_state"].get(idx) if isinstance(state_box.get("tool_calls_state"), dict) else None
+                                            if not isinstance(st, dict):
+                                                st = {"id": getattr(tc, "id", None), "name": None, "arguments": ""}
+                                            fn = getattr(tc, "function", None)
+                                            if fn is not None:
+                                                nm = getattr(fn, "name", None)
+                                                if nm:
+                                                    st["name"] = nm
+                                                ap = getattr(fn, "arguments", None)
+                                                if ap:
+                                                    st["arguments"] = (st.get("arguments") or "") + str(ap)
+                                            else:
+                                                try:
+                                                    fn2 = tc.get("function") if isinstance(tc, dict) else None
+                                                    if fn2:
+                                                        if fn2.get("name"):
+                                                            st["name"] = fn2.get("name")
+                                                        if fn2.get("arguments"):
+                                                            st["arguments"] = (st.get("arguments") or "") + str(fn2.get("arguments"))
+                                                except Exception:
+                                                    pass
+                                            state_box.setdefault("tool_calls_state", {})[idx] = st
+                                    except Exception:
+                                        pass
+                            except Exception:
+                                pass
+                        state_box["llm_end"] = int(_t.time() * 1000)
+                    except Exception as e:
+                        # Fallback: non-stream request
+                        if is_stream_unsupported_error(e):
+                            try:
+                                resp = agent.client.chat.completions.create(**ns_kwargs)
+                                state_box["llm_end"] = int(_t.time() * 1000)
+                                choice = resp.choices[0]
+                                msg = choice.message
+                                state_box["assistant_text"] = getattr(msg, "content", None) or ""
+                                state_box["thinking_text"] = extract_thinking_from_message(msg) or ""
+                                tcs = {}
+                                if getattr(msg, "tool_calls", None):
+                                    for i, tc in enumerate(msg.tool_calls or []):
+                                        try:
+                                            tcs[i] = {
+                                                "id": getattr(tc, "id", None),
+                                                "name": getattr(tc.function, "name", None),
+                                                "arguments": getattr(tc.function, "arguments", "") or "",
+                                            }
+                                        except Exception:
+                                            pass
+                                state_box["tool_calls_state"] = tcs
+                                state_box["finish_reason"] = getattr(choice, "finish_reason", None)
+                                # Simulate streaming for UX
+                                step = 300
+                                content = state_box["assistant_text"] or ""
+                                for i in range(0, len(content), step):
+                                    out_q.put(orjson.dumps({"chunk": content[i:i+step]}).decode() + "\n")
+                                state_box["fallback"] = True
+                            except Exception as ie:
+                                state_box["error"] = str(ie)
+                        else:
+                            state_box["error"] = str(e)
+                    finally:
+                        out_q.put("__STREAM_DONE__")
 
-                    trace.generation(
-                        name=gen_name,
-                        model=current_model,
-                        input=_jsonable(req_messages),
-                        output=gen_output,
-                        start_ms=llm_start,
-                        end_ms=llm_end,
-                        usage=usage_dict,
-                        metadata={
-                            "thinking": thinking_text or None,
-                            "finish_reason": getattr(choice, "finish_reason", None),
-                            "tool_calls": _jsonable(tool_calls_serialized) or None,
-                            # Separation: keep generation text/tool call distinction
-                            "tool_outputs": tools_input_snapshot or None,
-                            # Back-compat alias (will remove later)
-                            "tools_input": tools_input_snapshot or None,
-                            "request": {
-                                "model": current_model,
-                                "temperature": ns_kwargs.get("temperature"),
-                                "tool_choice": ns_kwargs.get("tool_choice"),
-                                "tools": _jsonable(tools_payload),
-                            },
-                            "raw_response": _jsonable(resp),
-                            "assistant_message": _jsonable(msg),
-                            "text_content": getattr(msg, "content", None),
-                            "duration_ms": (llm_end - llm_start),
-                            "history_len": len(history or []),
-                        },
-                    )
-                except Exception:
-                    pass
+                th = threading.Thread(target=_producer, daemon=True)
+                th.start()
 
-                if msg.tool_calls:
-                    # Persist + emit tool calls
-                    tool_call_msg = {
-                        "role": "assistant",
-                        "tool_calls": [tc.model_dump() for tc in msg.tool_calls],
-                        "content": msg.content,
-                        "thinking": (thinking_text if allow_thinking else None) or None,
-                        "model": current_model,
-                        "llm_start_ms": llm_start,
-                        "llm_end_ms": llm_end,
-                    }
-                    store.append(chat_id, tool_call_msg, updated_at=int(time.time() * 1000))
-                    history.append(tool_call_msg)
+                # Relay produced chunks to client as they arrive
+                while True:
+                    line = await asyncio.to_thread(out_q.get)
+                    if line == "__STREAM_DONE__":
+                        break
+                    try:
+                        yield line
+                    except Exception:
+                        break
 
-                    for tc in msg.tool_calls or []:
-                        args_raw = tc.function.arguments
-                        try:
-                            args = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
-                        except Exception:
-                            args = args_raw
-                        # Send tool_call event (include LLM timing and optional thinking)
-                        payload = {
-                            "type": "tool_call",
-                            "id": tc.id,
-                            "name": tc.function.name,
-                            "arguments": args,
-                            "llm_start_ms": llm_start,
-                            "llm_end_ms": llm_end,
-                            "llm_duration_ms": (llm_end - llm_start) if (llm_end and llm_start) else None,
-                        }
-                        if thinking_text and allow_thinking:
-                            payload["thinking"] = thinking_text
-                        yield orjson.dumps(payload).decode() + "\n"
-                        try:
-                            await asyncio.sleep(0)
-                        except Exception:
-                            pass
-
-                        from .agent.tools import dispatch_tool
-                        # Guard: encourage schema-first workflow
-                        try:
-                            if tc.function.name == "sql_query":
-                                has_schema = any((m.get("role") == "tool" and m.get("name") == "sql_schema") for m in history)
-                                t_start = int(time.time() * 1000)
-                                if not has_schema:
-                                    result = {"error": "schema_required", "message": "Call sql_schema first to confirm available tables/columns and then re-issue sql_query."}
-                                    t_end = int(time.time() * 1000)
-                                    executed_tools.append({
-                                        "id": tc.id,
-                                        "name": tc.function.name,
-                                        "arguments": _safe_json(args) if isinstance(args_raw, str) else _jsonable(args_raw),
-                                        "output": _safe_json(result),
-                                        "start_ms": t_start,
-                                        "end_ms": t_end,
-                                        "duration_ms": (t_end - t_start),
-                                        "status": "error",
-                                    })
-                                else:
-                                    result = dispatch_tool(agent.tools, tc.function.name, tc.function.arguments)
-                                    t_end = int(time.time() * 1000)
-                                    # Accumulate details for next generation node
-                                    executed_tools.append({
-                                        "id": tc.id,
-                                        "name": tc.function.name,
-                                        "arguments": _safe_json(args) if isinstance(args_raw, str) else _jsonable(args_raw),
-                                        "output": _safe_json(result),
-                                        "start_ms": t_start,
-                                        "end_ms": t_end,
-                                        "duration_ms": (t_end - t_start),
-                                        "status": "ok",
-                                    })
-                            else:
-                                t_start = int(time.time() * 1000)
-                                result = dispatch_tool(agent.tools, tc.function.name, tc.function.arguments)
-                                t_end = int(time.time() * 1000)
-                                executed_tools.append({
-                                    "id": tc.id,
-                                    "name": tc.function.name,
-                                    "arguments": _safe_json(args) if isinstance(args_raw, str) else _jsonable(args_raw),
-                                    "output": _safe_json(result),
-                                    "start_ms": t_start,
-                                    "end_ms": t_end,
-                                    "duration_ms": (t_end - t_start),
-                                    "status": "ok",
-                                })
-                        except Exception as e:
-                            logger.exception("tool execution failed: %s", tc.function.name)
-                            result = {"error": "tool_exception", "message": str(e)}
-                            executed_tools.append({
-                                "id": tc.id,
-                                "name": tc.function.name,
-                                "arguments": _safe_json(tc.function.arguments),
-                                "output": {"error": str(e)},
-                                "status": "error",
-                            })
-
-                        tool_msg = {
-                            "role": "tool",
-                            "tool_call_id": tc.id,
-                            "name": tc.function.name,
-                            "content": json.dumps(result),
-                        }
-                        store.append(chat_id, tool_msg, updated_at=int(time.time() * 1000))
-                        history.append(tool_msg)
-
-                        yield orjson.dumps({
-                            "type": "tool_result",
-                            "id": tc.id,
-                            "name": tc.function.name,
-                            "output": result,
-                            "start_ms": t_start,
-                            "end_ms": t_end,
-                            "duration_ms": (t_end - t_start),
-                        }).decode() + "\n"
-                        try:
-                            await asyncio.sleep(0)
-                        except Exception:
-                            pass
-                    # Next assistant turn
-                    continue
-
-                # Final answer path (chunked to the UI but not streamed from provider)
-                content = msg.content or ""
-                duration_ms = int(time.time() * 1000) - turn_start
-                final_msg = {
-                    "role": "assistant",
-                    "content": content,
-                    "duration_ms": duration_ms,
-                    "thinking": ((thinking_text if allow_thinking else None) or None),
-                    "model": current_model,
-                }
-                store.append(chat_id, final_msg, updated_at=int(time.time() * 1000))
-                history.append(final_msg)
-
-                # Chunk out content to emulate streaming UX
-                step = 300
-                for i in range(0, len(content), step):
-                    part = content[i : i + step]
-                    yield orjson.dumps({"chunk": part}).decode() + "\n"
-                    await asyncio.sleep(0.005)
-                yield orjson.dumps({"done": True}).decode() + "\n"
-                # No extra trace events; keep one generation node per LLM call
-                return
+                # Read state produced by the producer
+                assistant_text = str(state_box.get("assistant_text") or "")
+                thinking_text = str(state_box.get("thinking_text") or "")
+                tool_calls_state = dict(state_box.get("tool_calls_state") or {})
+                finish_reason = state_box.get("finish_reason")
+                llm_end = int(state_box.get("llm_end") or (time.time() * 1000))
 
                 # After stream closes, decide next step
                 duration_ms = int(time.time() * 1000) - turn_start
