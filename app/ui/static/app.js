@@ -86,6 +86,34 @@
         try { const json = typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2); const highlighted = hljs.highlight(json, { language: 'json' }).value; return sanitize(highlighted); }
         catch (e) { const str = (obj == null) ? '' : String(obj); return sanitize(str); }
       }
+      // Timeline helpers
+      function finalizeReasoning(timeline, llmStart, llmEnd) {
+        try {
+          if (!Array.isArray(timeline)) return;
+          for (let i = timeline.length - 1; i >= 0; i--) {
+            const it = timeline[i];
+            if (it && it.type === 'reasoning' && it.active) {
+              it.active = false;
+              if (typeof llmStart === 'number' && it.llmStart == null) it.llmStart = llmStart;
+              it.llmEnd = (typeof llmEnd === 'number') ? llmEnd : Date.now();
+              break;
+            }
+          }
+        } catch {}
+      }
+      // Extract plain text from tool output (non-thinking)
+      function extractToolText(out) {
+        try {
+          if (out == null) return null;
+          if (typeof out === 'string') { const s = out.trim(); return s ? s : null; }
+          if (typeof out === 'object') {
+            for (const k of ['text','content','message','output_text','stdout']) {
+              const v = out[k]; if (typeof v === 'string' && v.trim()) return v.trim();
+            }
+          }
+        } catch {}
+        return null;
+      }
       // Remove any thinking text from final content display
       function displayContent(m) {
         try {
@@ -126,6 +154,22 @@
       // Inline charts in assistant Markdown via ```chart code blocks
       const inlineCharts = {};
       function ensureChartRegistered() { try { if (typeof Chart !== 'undefined' && Chart.register && Chart.registerables && !Chart._sqlAgentRegistered) { Chart.register(...Chart.registerables); Chart._sqlAgentRegistered = true; } } catch {} }
+      function tryParseChart(raw) {
+        if (!raw) return null;
+        const s = String(raw).trim();
+        // 1) direct JSON
+        try { const v = JSON.parse(s); if (typeof v === 'string') { try { return JSON.parse(v); } catch {} } return v; } catch {}
+        // 2) quoted string with escapes
+        try {
+          if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+            const inner = s.slice(1, -1).replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\"/g, '"');
+            const v = JSON.parse(inner); if (typeof v === 'string') { try { return JSON.parse(v); } catch {} } return v;
+          }
+        } catch {}
+        // 3) loose: replace literal \n/\t outside strings heuristically
+        try { const loose = s.replace(/\\n/g, '\n').replace(/\\t/g, '\t'); return JSON.parse(loose); } catch {}
+        return null;
+      }
       function buildDatasetsFromSpec(spec) {
         const columns = spec.columns || (spec.data && spec.data.columns) || [];
         const rows = spec.rows || (spec.data && spec.data.rows) || [];
@@ -196,9 +240,9 @@
             let spec = null;
             // Prefer explicit ```chart blocks, but also accept JSON that looks like a chart spec
             if (/\blanguage-chart\b/.test(lang)) {
-              try { spec = JSON.parse(raw); } catch { spec = null; }
+              try { spec = tryParseChart(raw); } catch { spec = null; }
             } else if (/\blanguage-json\b/.test(lang) || !lang) {
-              try { const parsed = JSON.parse(raw); if (isChartSpec(parsed)) spec = parsed; } catch { spec = null; }
+              try { const parsed = tryParseChart(raw); if (isChartSpec(parsed)) spec = parsed; } catch { spec = null; }
             }
             if (!spec) return;
             // Fill sensible defaults for missing axis hints
@@ -397,7 +441,8 @@
                 }
                 // Stash pseudo message-level segments for later merge
                 if (!('timelineBeforeTools' in (m))) m.timelineBeforeTools = [];
-                m.timelineBeforeTools.push({ type: 'reasoning', id: 'r-pre', active: false, text: m.thinking || '', expanded: false, llmStart: llmStart, llmEnd: llmEnd });
+                const thinkTxt = (m.thinking && String(m.thinking).trim()) ? String(m.thinking) : '';
+                if (thinkTxt) { m.timelineBeforeTools.push({ type: 'reasoning', id: 'r-pre', active: false, text: thinkTxt, expanded: false, llmStart: llmStart, llmEnd: llmEnd }); }
                 if (m.content) { m.timelineBeforeTools.push({ type: 'content', id: 'pre-'+Math.random().toString(36).slice(2,7), text: String(m.content), active: false, expanded: true }); }
                 // Skip adding this intermediate assistant message
                 continue;
@@ -446,17 +491,24 @@
                   const pre = (list.find(x => x && x.tool_calls && x.timelineBeforeTools) || {}).timelineBeforeTools;
                   if (Array.isArray(pre) && pre.length) { amsg.timeline.push(...pre.map(x => ({...x}))); }
                 } catch {}
-                // Add tool items only (no content streaming)
+                // Add tool items; if tool produced plain text, surface it as inline chat content
                 if (amsg.tools && amsg.tools.length) {
                   for (const t of amsg.tools) {
-                    amsg.timeline.push({ type: 'tool', id: t.id, name: t.name, title: t.title, args: t.arguments, thinking: t.thinking, active: false, llmStart: t.llmStart ?? null, llmEnd: t.llmEnd ?? null, start: t.start ?? null, end: t.end ?? null, expanded: false, result: t.output });
+                    const ttitle = (t && (t.title || (t.arguments && t.arguments.title))) || '';
+                    if (String(ttitle).trim()) {
+                      amsg.timeline.push({ type: 'tool', id: t.id, name: t.name, title: ttitle, args: t.arguments, thinking: t.thinking, active: false, llmStart: t.llmStart ?? null, llmEnd: t.llmEnd ?? null, start: t.start ?? null, end: t.end ?? null, expanded: false, result: t.output });
+                    }
+                    try {
+                      const txt = extractToolText(t.output);
+                      if (txt) { amsg.timeline.push({ type: 'tool_text', id: 'tooltxt-'+(t.id || Math.random().toString(36).slice(2,7)), text: txt }); }
+                    } catch {}
                   }
                 }
                 // Add final reasoning segment if present on this assistant message (post-tools)
                 const postLlmStart = (typeof m.llm_start_ms === 'number') ? m.llm_start_ms : null;
                 const postLlmEnd = (typeof m.llm_end_ms === 'number') ? m.llm_end_ms : null;
-                if (m.thinking) {
-                  amsg.timeline.push({ type: 'reasoning', id: 'r-post', active: false, text: m.thinking, expanded: false, llmStart: postLlmStart, llmEnd: postLlmEnd });
+                if (m.thinking && String(m.thinking).trim()) {
+                  amsg.timeline.push({ type: 'reasoning', id: 'r-post', active: false, text: String(m.thinking), expanded: false, llmStart: postLlmStart, llmEnd: postLlmEnd });
                 }
                 if (m.duration_ms != null) amsg.totalMs = m.duration_ms;
                 out.push(amsg);
@@ -526,6 +578,8 @@
         messages.value.push(assistantMsg);
         let sawToolCall = false, sawToolResult = false, inFinal = false;
         let preToolContent = '';
+        let finalBuffer = '';
+        let afterTools = false;
         // If current session has no title, set one from the first user message
         const sess = sessions.value.find(s => s.id === chatId.value);
         if (sess && !sess.title) {
@@ -556,26 +610,25 @@
                 const evt = JSON.parse(line);
                 if (evt.type === 'tool_call') {
                   sawToolCall = true;
+                  // Finalize any active reasoning first
+                  finalizeReasoning(assistantMsg.timeline, evt.llm_start_ms, evt.llm_end_ms);
+                  // If we buffered content after previous tools, treat it as pre-tool step for this call
+                  try { const txt2 = (finalBuffer || '').trim(); if (txt2) { assistantMsg.timeline = assistantMsg.timeline || []; assistantMsg.timeline.push({ type: 'content', id: 'pre-'+Math.random().toString(36).slice(2,7), text: txt2, active: false, expanded: true }); finalBuffer=''; } } catch {}
+                  afterTools = false;
                   // If model wrote pre-tool content, add as a non-streamed step now
                   try { const txt = (preToolContent || '').trim(); if (txt) { assistantMsg.timeline = assistantMsg.timeline || []; assistantMsg.timeline.push({ type: 'content', id: 'pre-'+Math.random().toString(36).slice(2,7), text: txt, active: false, expanded: true }); preToolContent=''; } } catch {}
                   // Only stream thinking (handled below)
-                  // Finalize current reasoning segment if any
-                  try {
-                    const last = (assistantMsg.timeline||[]).slice(-1)[0];
-                    if (last && last.type === 'reasoning' && last.active) {
-                      last.active = false; last.llmStart = (typeof evt.llm_start_ms === 'number') ? evt.llm_start_ms : last.llmStart || null; last.llmEnd = (typeof evt.llm_end_ms === 'number') ? evt.llm_end_ms : Date.now();
-                    }
-                  } catch {}
+                  // Already finalized above
                   // Tool timeline item
                   assistantMsg.timeline = assistantMsg.timeline || [];
                   const parsedArgs = parseEvtArgs(evt.arguments);
                   const stepTitle = extractTitle(evt.arguments, parsedArgs);
-                  // Upsert timeline tool item (avoid dup on final tool_call)
+                  // Upsert timeline tool item (avoid dup on final tool_call); only show when title known
                   let tli = (assistantMsg.timeline||[]).find(x => x && x.type==='tool' && x.id===evt.id);
                   if (tli) {
                     tli.name = evt.name; tli.args = parsedArgs; tli.title = stepTitle || tli.title; tli.llmStart = (typeof evt.llm_start_ms === 'number') ? evt.llm_start_ms : (tli.llmStart ?? null); tli.llmEnd = (typeof evt.llm_end_ms === 'number') ? evt.llm_end_ms : (tli.llmEnd ?? null); tli.active = true; if (evt.thinking != null) tli.thinking = String(evt.thinking);
-                  } else {
-                    assistantMsg.timeline.push({ type: 'tool', id: evt.id, name: evt.name, title: stepTitle || undefined, args: parsedArgs, thinking: (evt.thinking != null) ? String(evt.thinking) : undefined, active: true, llmStart: (typeof evt.llm_start_ms === 'number') ? evt.llm_start_ms : null, llmEnd: (typeof evt.llm_end_ms === 'number') ? evt.llm_end_ms : null, start: null, end: null, expanded: false });
+                  } else if (stepTitle) {
+                    assistantMsg.timeline.push({ type: 'tool', id: evt.id, name: evt.name, title: stepTitle, args: parsedArgs, thinking: (evt.thinking != null) ? String(evt.thinking) : undefined, active: true, llmStart: (typeof evt.llm_start_ms === 'number') ? evt.llm_start_ms : null, llmEnd: (typeof evt.llm_end_ms === 'number') ? evt.llm_end_ms : null, start: null, end: null, expanded: false });
                   }
                   if (!assistantMsg.tools) assistantMsg.tools = [];
                   const existing = assistantMsg.tools.find(t => t.id === evt.id);
@@ -597,6 +650,7 @@
                   await nextTick();
                 } else if (evt.type === 'tool_result') {
                   sawToolResult = true;
+                  afterTools = true;
                   if (!assistantMsg.tools) assistantMsg.tools = [];
                   const existing = assistantMsg.tools.find(t => t.id === evt.id);
                   const se = (typeof evt.start_ms === 'number') ? evt.start_ms : null;
@@ -613,10 +667,23 @@
                     const tool = existing || (assistantMsg.tools.find(t => t.id === evt.id));
                     if (tool) { tool._chartId = tool._chartId || ('chart-' + Math.random().toString(36).slice(2,9)); if (tool.expanded) { await nextTick(); renderChartForTool(tool); } }
                   }
-                  // Mark tool timeline item completed with exec timing
+                  // Mark tool timeline item completed; insert its raw text right after header
                   try {
-                    const tli = (assistantMsg.timeline||[]).find(x => x && x.type==='tool' && x.id===evt.id);
-                    if (tli) { tli.active = false; tli.start = (typeof evt.start_ms==='number')?evt.start_ms:null; tli.end = (typeof evt.end_ms==='number')?evt.end_ms:null; tli.result = evt.output; }
+                    const idx = (assistantMsg.timeline||[]).findIndex(x => x && x.type==='tool' && x.id===evt.id);
+                    if (idx >= 0) {
+                      const tli = assistantMsg.timeline[idx];
+                      tli.active = false; tli.start = (typeof evt.start_ms==='number')?evt.start_ms:null; tli.end = (typeof evt.end_ms==='number')?evt.end_ms:null; tli.result = evt.output;
+                      const txt = extractToolText(evt.output);
+                      if (txt) {
+                        assistantMsg.timeline.splice(idx+1, 0, { type: 'tool_text', id: 'tooltxt-'+evt.id+'-'+Math.random().toString(36).slice(2,5), text: txt });
+                      }
+                    } else {
+                      const txt = extractToolText(evt.output);
+                      if (txt) {
+                        assistantMsg.timeline = assistantMsg.timeline || [];
+                        assistantMsg.timeline.push({ type: 'tool_text', id: 'tooltxt-'+evt.id+'-'+Math.random().toString(36).slice(2,5), text: txt });
+                      }
+                    }
                   } catch {}
                   await nextTick();
                 } else if (evt.tools) {
@@ -636,13 +703,16 @@
                   assistantMsg.content += (assistantMsg.content ? '\n\n' : '') + `_(error: ${String(evt.error)})_`;
                   await nextTick();
                 } else if (evt.chunk) {
-                  // Only stream final summary after tool results; buffer pre-tool content for a step
+                  // Buffer narrative text; route to a pre-tool segment or final at end
                   if (!sawToolCall) { preToolContent += evt.chunk; }
-                  else if (sawToolResult) { assistantMsg.content += evt.chunk; }
+                  else { finalBuffer += evt.chunk; }
                   await nextTick(); scrollToBottom();
                 } else if (evt.done) {
                   // Finalize any active reasoning with end timestamp
-                  try { const last = (assistantMsg.timeline||[]).slice(-1)[0]; if (last && last.type==='reasoning' && last.active) { last.active=false; last.llmEnd = Date.now(); } } catch {}
+                  finalizeReasoning(assistantMsg.timeline, null, Date.now());
+                  // Commit any buffered final content
+                  try { const txt = (finalBuffer || '').trim(); if (txt) { assistantMsg.content += txt; } } catch {}
+                  finalBuffer = '';
                 }
               } catch {}
             }
@@ -749,15 +819,9 @@
       }
       function timelineToolTitle(it) {
         if (!it) return '';
-        if (it.title) return String(it.title);
-        if (it.args && it.args.title) return String(it.args.title);
-        try {
-          if (it.name === 'sql_query' && it.args && it.args.sql) {
-            const s = String(it.args.sql).trim().replace(/\s+/g,' ');
-            return s.slice(0, 60) + (s.length > 60 ? '…' : '');
-          }
-        } catch {}
-        return (it && it.name) || 'tool';
+        if (it.title && String(it.title).trim()) return String(it.title);
+        if (it.args && it.args.title && String(it.args.title).trim()) return String(it.args.title);
+        return '';
       }
       function timelineToolType(it) {
         if (!it) return 'other';

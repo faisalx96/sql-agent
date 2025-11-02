@@ -70,3 +70,9 @@ input:focus{border-color:var(--accent)}
 /* Shimmer for active steps */
 .shimmer{background:linear-gradient(90deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.12) 20%, rgba(255,255,255,0.03) 40%);background-size:200% 100%;animation:shimmer 1.6s linear infinite}
 @keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+
+/* Intermediate vs final styling */
+.timeline .prose{font-size:13px !important}
+.timeline .prose *{color:#cbd5e1 !important}
+.message-final .prose{font-size:15px !important}
+.message-final .prose *{color:#e2e8f0 !important}
