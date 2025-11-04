@@ -65,6 +65,11 @@ input:focus{border-color:var(--accent)}
 .prose>:first-child{margin-top:0 !important}
 .prose>:last-child{margin-bottom:0 !important}
 
+/* Make final message block edges flush */
+.message-content p{margin:0 !important}
+.message-content>:first-child{margin-top:0 !important}
+.message-content>:last-child{margin-bottom:0 !important}
+
 /* Use default browser bullets for assistant markdown lists (no overrides) */
 
 /* Shimmer for active steps */

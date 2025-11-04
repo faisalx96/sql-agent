@@ -500,7 +500,7 @@
                     }
                     try {
                       const txt = extractToolText(t.output);
-                      if (txt) { amsg.timeline.push({ type: 'tool_text', id: 'tooltxt-'+(t.id || Math.random().toString(36).slice(2,7)), text: txt }); }
+                      if (txt) { amsg.timeline.push({ type: 'tool_text', id: 'tooltxt-'+(t.id || Math.random().toString(36).slice(2,7)), name: t.name, text: txt }); }
                     } catch {}
                   }
                 }
@@ -610,6 +610,18 @@
                 const evt = JSON.parse(line);
                 if (evt.type === 'tool_call') {
                   sawToolCall = true;
+                  // Reset any final preview state (we don't stream tools)
+                  // If any tentative final text was shown, convert to a pre-tool content step
+                  try {
+                    if (!inFinal) {
+                      const streamed = (assistantMsg.content || '').trim();
+                      if (streamed) {
+                        assistantMsg.timeline = assistantMsg.timeline || [];
+                        assistantMsg.timeline.push({ type: 'content', id: 'pre-'+Math.random().toString(36).slice(2,7), text: streamed, active: false, expanded: true });
+                        assistantMsg.content = '';
+                      }
+                    }
+                  } catch {}
                   // Finalize any active reasoning first
                   finalizeReasoning(assistantMsg.timeline, evt.llm_start_ms, evt.llm_end_ms);
                   // If we buffered content after previous tools, treat it as pre-tool step for this call
@@ -651,6 +663,7 @@
                 } else if (evt.type === 'tool_result') {
                   sawToolResult = true;
                   afterTools = true;
+                  // Do not stream tool text
                   if (!assistantMsg.tools) assistantMsg.tools = [];
                   const existing = assistantMsg.tools.find(t => t.id === evt.id);
                   const se = (typeof evt.start_ms === 'number') ? evt.start_ms : null;
@@ -675,13 +688,13 @@
                       tli.active = false; tli.start = (typeof evt.start_ms==='number')?evt.start_ms:null; tli.end = (typeof evt.end_ms==='number')?evt.end_ms:null; tli.result = evt.output;
                       const txt = extractToolText(evt.output);
                       if (txt) {
-                        assistantMsg.timeline.splice(idx+1, 0, { type: 'tool_text', id: 'tooltxt-'+evt.id+'-'+Math.random().toString(36).slice(2,5), text: txt });
+                        assistantMsg.timeline.splice(idx+1, 0, { type: 'tool_text', id: 'tooltxt-'+evt.id+'-'+Math.random().toString(36).slice(2,5), name: evt.name, text: txt });
                       }
                     } else {
                       const txt = extractToolText(evt.output);
                       if (txt) {
                         assistantMsg.timeline = assistantMsg.timeline || [];
-                        assistantMsg.timeline.push({ type: 'tool_text', id: 'tooltxt-'+evt.id+'-'+Math.random().toString(36).slice(2,5), text: txt });
+                        assistantMsg.timeline.push({ type: 'tool_text', id: 'tooltxt-'+evt.id+'-'+Math.random().toString(36).slice(2,5), name: evt.name, text: txt });
                       }
                     }
                   } catch {}
@@ -703,16 +716,26 @@
                   assistantMsg.content += (assistantMsg.content ? '\n\n' : '') + `_(error: ${String(evt.error)})_`;
                   await nextTick();
                 } else if (evt.chunk) {
-                  // Buffer narrative text; route to a pre-tool segment or final at end
+                  // Never stream during tool phase; only buffer
                   if (!sawToolCall) { preToolContent += evt.chunk; }
                   else { finalBuffer += evt.chunk; }
                   await nextTick(); scrollToBottom();
                 } else if (evt.done) {
                   // Finalize any active reasoning with end timestamp
                   finalizeReasoning(assistantMsg.timeline, null, Date.now());
-                  // Commit any buffered final content
-                  try { const txt = (finalBuffer || '').trim(); if (txt) { assistantMsg.content += txt; } } catch {}
-                  finalBuffer = '';
+                  // Stream out finalBuffer progressively now that tools are done
+                  try {
+                    const step = 120;
+                    function flush() {
+                      if (!finalBuffer) return;
+                      const chunk = finalBuffer.slice(0, step);
+                      assistantMsg.content += chunk;
+                      finalBuffer = finalBuffer.slice(step);
+                      if (finalBuffer) setTimeout(flush, 30);
+                    }
+                    flush();
+                  } catch { assistantMsg.content += finalBuffer; finalBuffer = ''; }
+                  inFinal = true;
                 }
               } catch {}
             }
