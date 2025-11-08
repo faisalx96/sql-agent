@@ -124,3 +124,16 @@ class SessionStore:
                 self._save()
                 return True
             return False
+
+    def truncate_messages(self, chat_id: str, keep_count: int, *, updated_at: int) -> bool:
+        """Keep only the first 'keep_count' messages, removing the rest."""
+        with self._lock:
+            sess = self._data.get("sessions", {}).get(chat_id)
+            if not sess:
+                return False
+            messages = sess.get("messages", [])
+            if len(messages) > keep_count:
+                sess["messages"] = messages[:keep_count]
+                sess["updated_at"] = int(updated_at)
+                self._save()
+            return True

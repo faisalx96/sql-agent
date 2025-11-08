@@ -283,6 +283,7 @@ async def rename_session(chat_id: str, req: Request) -> Dict[str, Any]:
     body = await req.json()
     title = body.get("title")
     model_name = body.get("model")
+    truncate_to = body.get("truncate_to")
     import time
     if title is not None:
         ok = store.rename(chat_id, str(title).strip(), updated_at=int(time.time() * 1000))
@@ -290,6 +291,10 @@ async def rename_session(chat_id: str, req: Request) -> Dict[str, Any]:
             raise HTTPException(status_code=404, detail="not found")
     if model_name is not None:
         ok = store.update_model(chat_id, str(model_name).strip(), updated_at=int(time.time() * 1000))
+        if not ok:
+            raise HTTPException(status_code=404, detail="not found")
+    if truncate_to is not None:
+        ok = store.truncate_messages(chat_id, int(truncate_to), updated_at=int(time.time() * 1000))
         if not ok:
             raise HTTPException(status_code=404, detail="not found")
     return {"ok": True}

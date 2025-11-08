@@ -747,24 +747,36 @@
                   toast('Error: ' + String(evt.error).slice(0, 50), 3000);
                   await nextTick();
                 } else if (evt.chunk) {
-                  // Buffer all content for timeline display
+                  // Pre-tool: buffer for timeline. Post-tool: both buffer and stream to content
                   if (!sawToolCall) {
                     preToolContent += evt.chunk;
                   }
                   else {
                     finalBuffer += evt.chunk;
+                    // Stream to content field for immediate display below timeline
+                    assistantMsg.content += evt.chunk;
                   }
                   await nextTick(); scrollToBottom();
                 } else if (evt.done) {
                   // Finalize any active reasoning with end timestamp
                   finalizeReasoning(assistantMsg.timeline, null, Date.now());
-                  // Add final content to timeline if present
+                  // Add final content to timeline if present (post-tool)
                   try {
                     const txt = (finalBuffer || '').trim();
                     if (txt) {
                       assistantMsg.timeline = assistantMsg.timeline || [];
                       assistantMsg.timeline.push({ type: 'content', id: 'final-'+Math.random().toString(36).slice(2,7), text: txt, active: false, expanded: true });
                       finalBuffer = '';
+                    }
+                  } catch {}
+                  // If no tools were called, display preToolContent directly
+                  try {
+                    if (!sawToolCall) {
+                      const txt = (preToolContent || '').trim();
+                      if (txt) {
+                        assistantMsg.content = txt;
+                        preToolContent = '';
+                      }
                     }
                   } catch {}
                   inFinal = true;
@@ -789,7 +801,37 @@
       async function onSubmit() { const text = (input.value || '').trim(); if (!text || streaming.value) return; input.value = ''; await sendMessage(text); }
       function stopStreaming() { if (controller) controller.abort(); }
       const canRetry = Vue.computed(() => { const lastUser = [...messages.value].reverse().find(m => m.role === 'user'); return !!lastUser && !streaming.value; });
-      async function retryLast() { if (streaming.value) return; const lastUser = [...messages.value].reverse().find(m => m.role === 'user'); if (!lastUser) return; await sendMessage(lastUser.content); }
+      async function retryLast() {
+        if (streaming.value) return;
+        // Find last user message index
+        let lastUserIdx = -1;
+        for (let i = messages.value.length - 1; i >= 0; i--) {
+          if (messages.value[i].role === 'user') {
+            lastUserIdx = i;
+            break;
+          }
+        }
+        if (lastUserIdx === -1) return;
+        const lastUser = messages.value[lastUserIdx];
+        const userContent = lastUser.content;
+        // Remove user message and all after it from UI
+        const toRemove = messages.value.length - lastUserIdx;
+        if (toRemove > 0) {
+          messages.value.splice(lastUserIdx, toRemove);
+        }
+        // Truncate server-side history (keep up to but NOT including the user message)
+        try {
+          await fetch(`/api/sessions/${encodeURIComponent(chatId.value)}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ truncate_to: lastUserIdx })
+          });
+        } catch (e) {
+          console.error('[SQL Agent] Failed to truncate session history:', e);
+        }
+        // sendMessage will add the user message fresh
+        await sendMessage(userContent);
+      }
 
       onMounted(async () => {
         loadSettings();

@@ -127,10 +127,6 @@
               <svg class="size-4" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><rect x="6" y="6" width="12" height="12"/></svg>
               Stop
             </button>
-            <button :disabled="!canRetry" @click="retryLast" class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800/60 border border-slate-700/50 hover:border-slate-600 hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed text-sm text-slate-200 transition-colors">
-              <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9"/><path d="M3 3v6h6"/></svg>
-              Retry
-            </button>
           </div>
         </header>
 
@@ -168,6 +164,10 @@
               <div class="flex items-center gap-2">
                 <span v-if="m.role==='assistant' && m.model" class="inline-flex items-center px-2 py-1 rounded-md bg-slate-800/60 border border-slate-700/50 text-[11px] text-slate-200 font-medium">{{ m.model }}</span>
                 <span v-if="m.role==='assistant' && (m.totalMs || m.duration_ms)" class="text-[11px] text-slate-500">Total {{ formatDuration(m.totalMs || m.duration_ms) }}</span>
+                <button v-if="m.role==='user' && idx === messages.length - 2 && messages[idx + 1] && messages[idx + 1].role === 'assistant' && !streaming" @click="retryLast" class="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-slate-800/60 border border-slate-700/50 hover:border-slate-600 text-[11px] text-slate-300 hover:text-slate-200 transition-colors">
+                  <svg class="size-3" viewBox="0 0 20 20" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311h2.433a.75.75 0 000-1.5H3.989a.75.75 0 00-.75.75v4.242a.75.75 0 001.5 0v-2.43l.31.31a7 7 0 0011.712-3.138.75.75 0 00-1.449-.39zm1.23-3.723a.75.75 0 00.219-.53V2.929a.75.75 0 00-1.5 0V5.36l-.31-.31A7 7 0 003.239 8.188a.75.75 0 101.448.389A5.5 5.5 0 0113.89 6.11l.311.31h-2.432a.75.75 0 000 1.5h4.243a.75.75 0 00.53-.219z" clip-rule="evenodd"/></svg>
+                  Retry
+                </button>
               </div>
             </div>
             <!-- Assistant turn timeline: reasoning and tools before final content -->
@@ -540,9 +540,6 @@
                 </div>
               </div>
             <div v-if="m.role==='assistant'" class="message-final">
-              <div v-if="m.content && m.timeline && m.timeline.length" class="mb-2">
-                <span class="inline-flex items-center px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-[11px] text-emerald-300 font-medium">Final result</span>
-              </div>
               <div :id="'msg-content-'+idx" class="prose prose-invert max-w-none message-content" v-html="renderMarkdown(displayContent(m))"></div>
             </div>
             <div v-else class="whitespace-pre-wrap">{{ m.content }}</div>
