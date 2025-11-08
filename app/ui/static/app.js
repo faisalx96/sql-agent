@@ -760,15 +760,8 @@
                 } else if (evt.done) {
                   // Finalize any active reasoning with end timestamp
                   finalizeReasoning(assistantMsg.timeline, null, Date.now());
-                  // Add final content to timeline if present (post-tool)
-                  try {
-                    const txt = (finalBuffer || '').trim();
-                    if (txt) {
-                      assistantMsg.timeline = assistantMsg.timeline || [];
-                      assistantMsg.timeline.push({ type: 'content', id: 'final-'+Math.random().toString(36).slice(2,7), text: txt, active: false, expanded: true });
-                      finalBuffer = '';
-                    }
-                  } catch {}
+                  // Final answer should live only in the message body, not duplicated in the timeline
+                  finalBuffer = '';
                   // If no tools were called, display preToolContent directly
                   try {
                     if (!sawToolCall) {
