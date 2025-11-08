@@ -30,7 +30,7 @@
       const loadingSessions = ref(false);
       const loadingChat = ref(false);
       const showSettings = ref(false);
-      const settings = ref({ theme: 'dark', previewRowsCollapsed: 10, reducedMotion: false });
+      const settings = ref({ theme: 'dark', previewRowsCollapsed: 10, reducedMotion: false, enableReasoning: false, reasoningEffort: 'high' });
       const toasts = ref([]);
       let controller = null;
       let onKey = null;
@@ -396,7 +396,8 @@
             const out = [];
             let pendingTools = null;
             let allTools = [];
-            function upsertTools(dst, srcBatch) {
+            let batchIndex = 0;
+            function upsertTools(dst, srcBatch, batchId) {
               for (const t of (srcBatch || [])) {
                 const i = dst.findIndex(x => x.id === t.id);
                 if (i >= 0) {
@@ -404,8 +405,11 @@
                   dst[i].name = t.name || dst[i].name;
                   dst[i].arguments = (t.arguments != null) ? t.arguments : dst[i].arguments;
                   dst[i].title = (t.title != null) ? t.title : dst[i].title;
+                  if (batchId != null) dst[i]._batchId = batchId;
                 } else {
-                  dst.push({ ...t });
+                  const tool = { ...t };
+                  if (batchId != null) tool._batchId = batchId;
+                  dst.push(tool);
                 }
               }
             }
@@ -420,6 +424,7 @@
               if (m.role === 'assistant' && m.tool_calls) {
                 const llmStart = (typeof m.llm_start_ms === 'number') ? m.llm_start_ms : null;
                 const llmEnd = (typeof m.llm_end_ms === 'number') ? m.llm_end_ms : null;
+                const currentBatch = batchIndex++;
                 const batch = (m.tool_calls || []).map(tc => ({
                   id: tc.id,
                   name: tc.function && tc.function.name,
@@ -432,9 +437,10 @@
                   llmStart: llmStart,
                   llmEnd: llmEnd,
                   thinking: m.thinking || undefined,
+                  _batchId: currentBatch,
                 }));
                 pendingTools = batch;
-                upsertTools(allTools, batch);
+                upsertTools(allTools, batch, currentBatch);
                 // Build timeline: prior reasoning segment
                 if (!out.length || (out[out.length-1] && out[out.length-1].role !== 'assistant')) {
                   // delay attaching to the next assistant message block
@@ -442,8 +448,8 @@
                 // Stash pseudo message-level segments for later merge
                 if (!('timelineBeforeTools' in (m))) m.timelineBeforeTools = [];
                 const thinkTxt = (m.thinking && String(m.thinking).trim()) ? String(m.thinking) : '';
-                if (thinkTxt) { m.timelineBeforeTools.push({ type: 'reasoning', id: 'r-pre', active: false, text: thinkTxt, expanded: false, llmStart: llmStart, llmEnd: llmEnd }); }
-                if (m.content) { m.timelineBeforeTools.push({ type: 'content', id: 'pre-'+Math.random().toString(36).slice(2,7), text: String(m.content), active: false, expanded: true }); }
+                if (thinkTxt) { m.timelineBeforeTools.push({ type: 'reasoning', id: 'r-pre-'+currentBatch, active: false, text: thinkTxt, expanded: false, llmStart: llmStart, llmEnd: llmEnd, _batchId: currentBatch }); }
+                if (m.content) { m.timelineBeforeTools.push({ type: 'content', id: 'pre-'+currentBatch+'-'+Math.random().toString(36).slice(2,7), text: String(m.content), active: false, expanded: true, _batchId: currentBatch }); }
                 // Skip adding this intermediate assistant message
                 continue;
               }
@@ -486,24 +492,37 @@
                     amsg.previewExpanded = false;
                   }
                 }
-                // Merge any pre-tools reasoning stored on the interim assistant message
+                // Interleave pre-tools timeline with tools by batch
                 try {
-                  const pre = (list.find(x => x && x.tool_calls && x.timelineBeforeTools) || {}).timelineBeforeTools;
-                  if (Array.isArray(pre) && pre.length) { amsg.timeline.push(...pre.map(x => ({...x}))); }
-                } catch {}
-                // Add tool items; if tool produced plain text, surface it as inline chat content
-                if (amsg.tools && amsg.tools.length) {
-                  for (const t of amsg.tools) {
-                    const ttitle = (t && (t.title || (t.arguments && t.arguments.title))) || '';
-                    if (String(ttitle).trim()) {
-                      amsg.timeline.push({ type: 'tool', id: t.id, name: t.name, title: ttitle, args: t.arguments, thinking: t.thinking, active: false, llmStart: t.llmStart ?? null, llmEnd: t.llmEnd ?? null, start: t.start ?? null, end: t.end ?? null, expanded: false, result: t.output });
-                    }
-                    try {
-                      const txt = extractToolText(t.output);
-                      if (txt) { amsg.timeline.push({ type: 'tool_text', id: 'tooltxt-'+(t.id || Math.random().toString(36).slice(2,7)), name: t.name, text: txt }); }
-                    } catch {}
+                  const allPre = list.filter(x => x && x.tool_calls && x.timelineBeforeTools).flatMap(x => x.timelineBeforeTools);
+                  const batches = new Set();
+                  if (amsg.tools) {
+                    amsg.tools.forEach(t => { if (t._batchId != null) batches.add(t._batchId); });
                   }
-                }
+                  const sortedBatches = Array.from(batches).sort((a, b) => a - b);
+                  
+                  for (const bid of sortedBatches) {
+                    // Add timeline entries for this batch
+                    const preItems = allPre.filter(x => x._batchId === bid);
+                    preItems.forEach(x => { amsg.timeline.push({...x}); });
+                    
+                    // Add tool items for this batch
+                    if (amsg.tools) {
+                      const batchTools = amsg.tools.filter(t => t._batchId === bid);
+                      for (const t of batchTools) {
+                        const ttitle = (t && (t.title || (t.arguments && t.arguments.title))) || '';
+                        if (String(ttitle).trim()) {
+                          amsg.timeline.push({ type: 'tool', id: t.id, name: t.name, title: ttitle, args: t.arguments, thinking: t.thinking, active: false, llmStart: t.llmStart ?? null, llmEnd: t.llmEnd ?? null, start: t.start ?? null, end: t.end ?? null, expanded: false, result: t.output });
+                        }
+                        try {
+                          const txt = extractToolText(t.output);
+                          const skipFileTools = ['read_file', 'write_file', 'list_files', 'search_files'].includes(t.name);
+                          if (txt && !skipFileTools) { amsg.timeline.push({ type: 'tool_text', id: 'tooltxt-'+(t.id || Math.random().toString(36).slice(2,7)), name: t.name, text: txt }); }
+                        } catch {}
+                      }
+                    }
+                  }
+                } catch {}
                 // Add final reasoning segment if present on this assistant message (post-tools)
                 const postLlmStart = (typeof m.llm_start_ms === 'number') ? m.llm_start_ms : null;
                 const postLlmEnd = (typeof m.llm_end_ms === 'number') ? m.llm_end_ms : null;
@@ -594,10 +613,13 @@
         streaming.value = true; turnStart.value = Date.now();
         if (!tickTimer) { tickTimer = setInterval(() => { tick.value = (tick.value + 1) | 0; }, 100); }
         try {
-          const res = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chatId.value, message: text }), signal: controller.signal });
+          const res = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chatId.value, message: text, enable_reasoning: settings.value.enableReasoning, reasoning_effort: settings.value.reasoningEffort }), signal: controller.signal });
           if (!res.ok || !res.body) {
             const msg = await res.text().catch(() => '');
-            assistantMsg.content += (assistantMsg.content ? '\n\n' : '') + `_(error ${res.status}: ${msg.slice(0,200)})_`;
+            console.error('[SQL Agent] HTTP error:', res.status, msg);
+            const errorMsg = `**⚠️ Error ${res.status}:** ${msg.slice(0,200)}`;
+            assistantMsg.content += (assistantMsg.content ? '\n\n' : '') + errorMsg;
+            toast(`Error ${res.status}: ${msg.slice(0,50)}`, 4000);
             return;
           }
           const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
@@ -628,7 +650,7 @@
                   try { const txt2 = (finalBuffer || '').trim(); if (txt2) { assistantMsg.timeline = assistantMsg.timeline || []; assistantMsg.timeline.push({ type: 'content', id: 'pre-'+Math.random().toString(36).slice(2,7), text: txt2, active: false, expanded: true }); finalBuffer=''; } } catch {}
                   afterTools = false;
                   // If model wrote pre-tool content, add as a non-streamed step now
-                  try { const txt = (preToolContent || '').trim(); if (txt) { assistantMsg.timeline = assistantMsg.timeline || []; assistantMsg.timeline.push({ type: 'content', id: 'pre-'+Math.random().toString(36).slice(2,7), text: txt, active: false, expanded: true }); preToolContent=''; } } catch {}
+                  try { const txt = (preToolContent || '').trim(); if (txt) { assistantMsg.timeline = assistantMsg.timeline || []; assistantMsg.timeline.push({ type: 'content', id: 'pre-'+Math.random().toString(36).slice(2,7), text: txt, active: false, expanded: true }); preToolContent=''; assistantMsg.content = ''; } } catch {}
                   // Only stream thinking (handled below)
                   // Already finalized above
                   // Tool timeline item
@@ -687,12 +709,14 @@
                       const tli = assistantMsg.timeline[idx];
                       tli.active = false; tli.start = (typeof evt.start_ms==='number')?evt.start_ms:null; tli.end = (typeof evt.end_ms==='number')?evt.end_ms:null; tli.result = evt.output;
                       const txt = extractToolText(evt.output);
-                      if (txt) {
+                      const skipFileTools = ['read_file', 'write_file', 'list_files', 'search_files'].includes(evt.name);
+                      if (txt && !skipFileTools) {
                         assistantMsg.timeline.splice(idx+1, 0, { type: 'tool_text', id: 'tooltxt-'+evt.id+'-'+Math.random().toString(36).slice(2,5), name: evt.name, text: txt });
                       }
                     } else {
                       const txt = extractToolText(evt.output);
-                      if (txt) {
+                      const skipFileTools = ['read_file', 'write_file', 'list_files', 'search_files'].includes(evt.name);
+                      if (txt && !skipFileTools) {
                         assistantMsg.timeline = assistantMsg.timeline || [];
                         assistantMsg.timeline.push({ type: 'tool_text', id: 'tooltxt-'+evt.id+'-'+Math.random().toString(36).slice(2,5), name: evt.name, text: txt });
                       }
@@ -713,35 +737,47 @@
                   last.text += String(evt.content);
                   await nextTick();
                 } else if (evt.error) {
-                  assistantMsg.content += (assistantMsg.content ? '\n\n' : '') + `_(error: ${String(evt.error)})_`;
+                  console.error('[SQL Agent] Error from server:', evt.error);
+                  const errorMsg = `**⚠️ Error:** ${String(evt.error)}`;
+                  if (assistantMsg.timeline && assistantMsg.timeline.length) {
+                    assistantMsg.timeline.push({ type: 'error', id: 'err-'+Math.random().toString(36).slice(2,7), text: errorMsg });
+                  } else {
+                    assistantMsg.content += (assistantMsg.content ? '\n\n' : '') + errorMsg;
+                  }
+                  toast('Error: ' + String(evt.error).slice(0, 50), 3000);
                   await nextTick();
                 } else if (evt.chunk) {
-                  // Never stream during tool phase; only buffer
-                  if (!sawToolCall) { preToolContent += evt.chunk; }
-                  else { finalBuffer += evt.chunk; }
+                  // Buffer all content for timeline display
+                  if (!sawToolCall) {
+                    preToolContent += evt.chunk;
+                  }
+                  else {
+                    finalBuffer += evt.chunk;
+                  }
                   await nextTick(); scrollToBottom();
                 } else if (evt.done) {
                   // Finalize any active reasoning with end timestamp
                   finalizeReasoning(assistantMsg.timeline, null, Date.now());
-                  // Stream out finalBuffer progressively now that tools are done
+                  // Add final content to timeline if present
                   try {
-                    const step = 120;
-                    function flush() {
-                      if (!finalBuffer) return;
-                      const chunk = finalBuffer.slice(0, step);
-                      assistantMsg.content += chunk;
-                      finalBuffer = finalBuffer.slice(step);
-                      if (finalBuffer) setTimeout(flush, 30);
+                    const txt = (finalBuffer || '').trim();
+                    if (txt) {
+                      assistantMsg.timeline = assistantMsg.timeline || [];
+                      assistantMsg.timeline.push({ type: 'content', id: 'final-'+Math.random().toString(36).slice(2,7), text: txt, active: false, expanded: true });
+                      finalBuffer = '';
                     }
-                    flush();
-                  } catch { assistantMsg.content += finalBuffer; finalBuffer = ''; }
+                  } catch {}
                   inFinal = true;
                 }
               } catch {}
             }
           }
         } catch (e) {
-          if (e.name !== 'AbortError') { assistantMsg.content += '\n\n_(stream error)_'; }
+          if (e.name !== 'AbortError') {
+            console.error('[SQL Agent] Stream error:', e);
+            assistantMsg.content += '\n\n**⚠️ Stream error:** ' + String(e.message || e);
+            toast('Stream error: ' + String(e.message || e).slice(0,50), 4000);
+          }
         } finally {
           // Store total duration on the assistant message
           try { assistantMsg.totalMs = (turnStart.value != null) ? (Date.now() - turnStart.value) : undefined; } catch {}

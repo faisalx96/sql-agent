@@ -320,6 +320,7 @@ async def new_chat(req: Request) -> Dict[str, str]:
     import time
     now_ms = int(time.time() * 1000)
     store.create(chat_id, title=title, created_at=now_ms, model=(model_name or agent.model))
+    logger.info("Created new chat: chat_id=%s model=%s", chat_id, model_name or agent.model)
     return {"chat_id": chat_id}
 
 
@@ -328,6 +329,8 @@ async def chat(req: Request):
     body = await req.json()
     chat_id = body.get("chat_id")
     user_message = body.get("message")
+    enable_reasoning = body.get("enable_reasoning", False)
+    reasoning_effort = body.get("reasoning_effort", "high")
     if not chat_id:
         raise HTTPException(status_code=400, detail="chat_id required")
     if not user_message:
@@ -337,6 +340,7 @@ async def chat(req: Request):
     import time
     now_ms = int(time.time() * 1000)
     turn_start = now_ms
+    logger.info("New message: chat_id=%s reasoning=%s effort=%s msg_len=%d", chat_id, enable_reasoning, reasoning_effort if enable_reasoning else 'n/a', len(user_message))
     store.append(chat_id, {"role": "user", "content": str(user_message)}, updated_at=now_ms)
     history = store.get_messages(chat_id)
 
@@ -437,6 +441,7 @@ async def chat(req: Request):
                     m = sess_meta.get("model")
                     if m:
                         current_model = str(m)
+                logger.info("LLM call starting: model=%s tools=%d history_len=%d", current_model, len(agent.tools or []), len(history))
 
                 # Provider streaming (via OpenAI SDK; compatible with OpenRouter). Fallback to non-streaming if rejected.
                 lower_model = str(current_model).lower()
@@ -451,6 +456,11 @@ async def chat(req: Request):
                 )
                 if not lower_model.startswith("gpt-5"):
                     ns_kwargs["temperature"] = 0.2
+                if enable_reasoning:
+                    # For o1/o3 models, enable extended reasoning with user-selected effort
+                    effort = reasoning_effort if reasoning_effort in ("low", "medium", "high") else "high"
+                    ns_kwargs["extra_body"] = {"reasoning": {"effort": effort}}
+                    logger.info("Reasoning enabled via extra_body: effort=%s", effort)
 
                 assistant_text = ""
                 thinking_text = ""
@@ -570,6 +580,7 @@ async def chat(req: Request):
                         state_box["llm_end"] = int(_t.time() * 1000)
                     except Exception as e:
                         # Fallback: non-stream request
+                        logger.warning("Streaming failed, attempting fallback: %s", str(e))
                         if is_stream_unsupported_error(e):
                             try:
                                 resp = agent.client.chat.completions.create(**ns_kwargs)
@@ -598,8 +609,10 @@ async def chat(req: Request):
                                     out_q.put(orjson.dumps({"chunk": content[i:i+step]}).decode() + "\n")
                                 state_box["fallback"] = True
                             except Exception as ie:
+                                logger.error("Non-stream fallback failed: %s", str(ie))
                                 state_box["error"] = str(ie)
                         else:
+                            logger.error("Stream error (no fallback): %s", str(e))
                             state_box["error"] = str(e)
                     finally:
                         out_q.put("__STREAM_DONE__")
@@ -623,6 +636,13 @@ async def chat(req: Request):
                 tool_calls_state = dict(state_box.get("tool_calls_state") or {})
                 finish_reason = state_box.get("finish_reason")
                 llm_end = int(state_box.get("llm_end") or (time.time() * 1000))
+                
+                # If producer encountered an error, emit it to client
+                if state_box.get("error"):
+                    logger.error("LLM call failed: %s", state_box.get("error"))
+                    yield orjson.dumps({"type": "error", "error": f"LLM error: {state_box.get('error')}"}).decode() + "\n"
+                    yield orjson.dumps({"done": True}).decode() + "\n"
+                    break
 
                 # After stream closes, decide next step
                 duration_ms = int(time.time() * 1000) - turn_start
@@ -737,7 +757,7 @@ async def chat(req: Request):
                                 result = dispatch_tool(agent.tools, fname, fargs)
                                 end_ms = int(time.time() * 1000)
                         except Exception as e:
-                            logger.exception("tool execution failed: %s", tc)
+                            logger.exception("tool execution failed for %s: %s", fname, str(e), exc_info=True)
                             result = {"error": "tool_exception", "message": str(e)}
                             end_ms = int(time.time() * 1000)
 
@@ -828,12 +848,11 @@ async def chat(req: Request):
                 yield orjson.dumps({"done": True}).decode() + "\n"
                 break
         except Exception as e:
-            logger.exception("streaming loop error")
+            logger.exception("streaming loop error: %s", str(e), exc_info=True)
             try:
                 yield orjson.dumps({"type": "error", "error": str(e)}).decode() + "\n"
-            except Exception:
-                # best effort
-                pass
+            except Exception as emit_err:
+                logger.error("Failed to emit error to client: %s", str(emit_err))
         finally:
             # Ensure traces are flushed to Langfuse backend
             try:
