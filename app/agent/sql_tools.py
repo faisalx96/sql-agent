@@ -6,14 +6,14 @@ from .tools import ToolSpec
 from ..db import Database
 
 
-def _normalize_params(params: Any) -> Any:
-    # SQLite supports positional (list/tuple) or named (dict) params.
+def _normalize_params(params: Any) -> Dict[str, Any] | None:
+    # SQLAlchemy text() requires named params (dict).
     if params is None:
         return None
-    if isinstance(params, (list, tuple, dict)):
+    if isinstance(params, dict):
         return params
-    # Try not to be picky; pass through scalars in a 1-item list
-    return [params]
+    # Ignore non-dict params; caller should use named placeholders
+    return None
 
 
 def make_sql_tools(db: Database) -> List[ToolSpec]:

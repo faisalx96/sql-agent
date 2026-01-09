@@ -1,33 +1,29 @@
 from __future__ import annotations
 
-import sqlite3
 import threading
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Tuple
-from urllib.parse import urlparse
+from decimal import Decimal
+from datetime import date, datetime, time
+from typing import Any, Dict, List, Optional
+from uuid import UUID
+
+from sqlalchemy import create_engine, text, inspect
+from sqlalchemy.engine import Engine
 
 
-def _parse_sqlite_path(database_url: str) -> str:
-    """Parse a sqlite:/// URL into a filesystem path.
-
-    Accepts forms like:
-    - sqlite:///absolute/path.db
-    - sqlite:////absolute/path.db (also ok)
-    - file:/absolute/path.db
-    - Direct filesystem paths are returned unchanged.
-    """
-    if database_url.startswith("sqlite"):
-        parsed = urlparse(database_url)
-        path = parsed.path
-        if path.startswith("//"):
-            # urlparse on 'sqlite:////abs.db' yields path='//abs.db'
-            path = path[1:]
-        return path
-    if database_url.startswith("file:"):
-        parsed = urlparse(database_url)
-        return parsed.path
-    # Treat as a direct path
-    return database_url
+def _jsonify(val: Any) -> Any:
+    """Convert DB types to JSON-serializable equivalents."""
+    if val is None:
+        return None
+    if isinstance(val, Decimal):
+        return float(val)
+    if isinstance(val, (datetime, date, time)):
+        return val.isoformat()
+    if isinstance(val, UUID):
+        return str(val)
+    if isinstance(val, bytes):
+        return val.decode("utf-8", errors="replace")
+    return val
 
 
 @dataclass
@@ -39,55 +35,67 @@ class QueryResult:
 
 class Database:
     def __init__(self, database_url: str):
-        path = _parse_sqlite_path(database_url)
-        self._conn = sqlite3.connect(path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        with self._conn:
-            self._conn.execute("PRAGMA foreign_keys = ON;")
+        self._engine: Engine = create_engine(database_url, pool_pre_ping=True)
         self._lock = threading.Lock()
 
-    def _execute(self, sql: str, params: Optional[Iterable[Any]] | Optional[Dict[str, Any]] = None):
-        cur = self._conn.cursor()
-        cur.execute(sql, params or [])
-        return cur
+    @property
+    def dialect(self) -> str:
+        return self._engine.dialect.name
 
-    def query(self, sql: str, params: Optional[Iterable[Any]] | Optional[Dict[str, Any]] = None, max_rows: int = 100) -> QueryResult:
+    def query(
+        self,
+        sql: str,
+        params: Optional[Dict[str, Any]] = None,
+        max_rows: int = 100,
+    ) -> QueryResult:
         sql_stripped = sql.lstrip().lower()
         if not (sql_stripped.startswith("select") or sql_stripped.startswith("with")):
             raise ValueError("sql_query only allows read-only SELECT/CTE statements")
-        with self._lock:
-            cur = self._execute(sql, params)
-            rows = cur.fetchmany(max_rows)
-            cols = [d[0] for d in cur.description] if cur.description else []
-            return QueryResult(columns=cols, rows=[list(r) for r in rows], rowcount=len(rows))
 
-    def execute(self, sql: str, params: Optional[Iterable[Any]] | Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        with self._lock, self._conn:
-            cur = self._execute(sql, params)
-            last_id = cur.lastrowid
-            count = cur.rowcount
-            return {"rows_affected": count, "last_row_id": last_id}
+        with self._lock, self._engine.connect() as conn:
+            result = conn.execute(text(sql), params or {})
+            cols = list(result.keys())
+            rows = [[_jsonify(v) for v in row] for row in result.fetchmany(max_rows)]
+            return QueryResult(columns=cols, rows=rows, rowcount=len(rows))
+
+    def execute(
+        self,
+        sql: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        with self._lock, self._engine.connect() as conn:
+            result = conn.execute(text(sql), params or {})
+            conn.commit()
+            return {
+                "rows_affected": result.rowcount,
+                "last_row_id": getattr(result, "lastrowid", None),
+            }
 
     def schema(self) -> Dict[str, Any]:
-        with self._lock:
-            cur = self._conn.cursor()
+        with self._lock, self._engine.connect() as conn:
+            insp = inspect(conn)
             tables = []
-            for (name,) in cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name;"):
-                sanitized = name.replace("'", "''")
-                info_cur = self._conn.execute(f"PRAGMA table_info('{sanitized}')")
+            for table_name in insp.get_table_names():
+                # Get primary key columns
+                pk_info = insp.get_pk_constraint(table_name)
+                pk_cols = set(pk_info.get("constrained_columns", []) if pk_info else [])
+
                 cols = []
-                for row in info_cur.fetchall():
+                for col in insp.get_columns(table_name):
                     cols.append({
-                        "cid": row[0],
-                        "name": row[1],
-                        "type": row[2],
-                        "notnull": bool(row[3]),
-                        "default": row[4],
-                        "pk": bool(row[5]),
+                        "name": col["name"],
+                        "type": str(col["type"]),
+                        "nullable": col.get("nullable", True),
+                        "default": col.get("default"),
+                        "primary_key": col["name"] in pk_cols,
                     })
+                # Row count
                 try:
-                    (count,) = self._conn.execute(f"SELECT COUNT(*) FROM '{sanitized}'").fetchone()
-                except sqlite3.Error:
+                    count_result = conn.execute(
+                        text(f'SELECT COUNT(*) FROM "{table_name}"')
+                    )
+                    count = count_result.scalar()
+                except Exception:
                     count = None
-                tables.append({"name": name, "columns": cols, "row_count": count})
-            return {"dialect": "sqlite", "tables": tables}
+                tables.append({"name": table_name, "columns": cols, "row_count": count})
+            return {"dialect": self.dialect, "tables": tables}
