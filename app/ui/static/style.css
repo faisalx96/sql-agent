@@ -72,8 +72,10 @@ input:focus{border-color:var(--accent)}
 
 /* Use default browser bullets for assistant markdown lists (no overrides) */
 
-/* Shimmer for active steps */
-.shimmer{background:linear-gradient(90deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.12) 20%, rgba(255,255,255,0.03) 40%);background-size:200% 100%;animation:shimmer 1.6s linear infinite}
+/* Shimmer for active steps (background) */
+.shimmer-bg{background:linear-gradient(90deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.12) 20%, rgba(255,255,255,0.03) 40%);background-size:200% 100%;animation:shimmer 1.6s linear infinite}
+/* Shimmer for text (Cursor-style blue gradient) */
+.shimmer{background:linear-gradient(90deg, #94a3b8 0%, #38bdf8 40%, #818cf8 60%, #94a3b8 100%);background-size:300% 100%;-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;animation:shimmer 2s ease-in-out infinite}
 @keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
 
 /* Intermediate vs final styling */

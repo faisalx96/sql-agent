@@ -14,6 +14,8 @@ class Config:
     openai_model: str
     # Optional default headers for OpenAI-compatible providers (e.g., OpenRouter)
     openai_default_headers: dict | None
+    # Extra body params for OpenRouter (e.g., provider preferences)
+    openrouter_extra_body: dict | None
     app_host: str
     app_port: int
     workspace_dir: Path
@@ -53,6 +55,7 @@ class Config:
 
         # Optional default headers for OpenRouter (recommended: HTTP-Referer and X-Title)
         default_headers = None
+        openrouter_extra_body = None
         try:
             if base_url and "openrouter.ai" in str(base_url):
                 ref = (os.getenv("OPENROUTER_SITE_URL") or "").strip()
@@ -63,6 +66,8 @@ class Config:
                 if title:
                     headers["X-Title"] = title
                 default_headers = headers or None
+                # Prioritize low-latency providers
+                openrouter_extra_body = {"provider": {"sort": "latency"}}
         except Exception:
             default_headers = None
 
@@ -71,6 +76,7 @@ class Config:
             openai_base_url=base_url,
             openai_model=model,
             openai_default_headers=default_headers,
+            openrouter_extra_body=openrouter_extra_body,
             app_host=host,
             app_port=port,
             workspace_dir=workspace,

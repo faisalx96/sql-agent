@@ -177,7 +177,7 @@
                 <template v-if="it.type==='reasoning' && (it.active || (it.text && it.text.trim().length))">
                   <div class="flex items-center gap-2">
                     <button @click="it.expanded = !it.expanded" class="flex items-center gap-2 text-left hover:text-slate-200 bg-transparent border-none p-0 cursor-pointer focus:outline-none">
-                      <span v-if="it.active" :class="['text-xs text-slate-300 shimmer px-1 rounded']">Thinking…</span>
+                      <span v-if="it.active" class="text-xs shimmer">Thinking…</span>
                       <span v-else class="text-xs text-slate-500">Thought for</span>
                       <template v-if="it.llmStart && it.llmEnd">
                         <span class="text-[11px] text-slate-500">{{ formatDurationShort(it.llmEnd - it.llmStart) }}</span>
@@ -185,7 +185,7 @@
                       <svg :class="it.expanded ? 'rotate-90' : ''" class="size-3 text-slate-400 transition-transform" viewBox="0 0 20 20" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" d="M7.21 5.23a.75.75 0 0 1 1.06-.02l4.4 4.24a.75.75 0 0 1 0 1.08l-4.4 4.24a.75.75 0 1 1-1.04-1.08L10.585 10 7.23 6.29a.75.75 0 0 1-.02-1.06z" clip-rule="evenodd"/></svg>
                     </button>
                   </div>
-                  <div v-show="it.expanded" :class="['mt-1 p-2 rounded border border-slate-800 bg-slate-900/60 text-xs whitespace-pre-wrap', it.active ? 'shimmer' : 'text-slate-400']">{{ it.text }}</div>
+                  <div v-show="it.expanded" class="mt-1 p-2 rounded border border-slate-800 bg-slate-900/60 text-xs whitespace-pre-wrap text-slate-400">{{ it.text }}</div>
                 </template>
                 <!-- Content item (non-streaming, pre-tool narrative) -->
                 <template v-else-if="it.type==='content'">
@@ -212,8 +212,17 @@
                         <template v-else-if="timelineToolType(it) === 'files'">FILE</template>
                         <template v-else>TOOL</template>
                       </span>
-                      <span class="text-[11px] text-slate-500">
-                        <template v-if="it.active">running…</template>
+                      <span :class="['text-[11px]', it.executing ? 'shimmer' : (it.result && !it.active ? 'text-emerald-400' : 'text-slate-500')]">
+                        <template v-if="it.executing">executing…</template>
+                        <template v-else-if="it.active">running…</template>
+                        <template v-else-if="it.result && !it.active">
+                          <span class="inline-flex items-center gap-1">
+                            <svg class="size-3" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+                            <template v-if="it.llmStart && it.llmEnd && it.start && it.end">{{ formatDurationShort((it.llmEnd - it.llmStart) + (it.end - it.start)) }}</template>
+                            <template v-else-if="it.start && it.end">{{ formatDurationShort(it.end - it.start) }}</template>
+                            <template v-else>done</template>
+                          </span>
+                        </template>
                         <template v-else-if="it.llmStart && it.llmEnd && it.start && it.end">{{ formatDurationShort((it.llmEnd - it.llmStart) + (it.end - it.start)) }}</template>
                         <template v-else-if="it.llmStart && it.llmEnd">{{ formatDurationShort(it.llmEnd - it.llmStart) }}</template>
                         <template v-else-if="it.start && it.end">{{ formatDurationShort(it.end - it.start) }}</template>

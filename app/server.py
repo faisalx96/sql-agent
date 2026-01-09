@@ -461,11 +461,17 @@ async def chat(req: Request):
                 )
                 if not lower_model.startswith("gpt-5"):
                     ns_kwargs["temperature"] = 0.2
+                # Build extra_body: OpenRouter provider prefs + reasoning
+                extra_body: Dict[str, Any] = {}
+                if cfg.openrouter_extra_body:
+                    extra_body.update(cfg.openrouter_extra_body)
                 if enable_reasoning:
                     # For o1/o3 models, enable extended reasoning with user-selected effort
                     effort = reasoning_effort if reasoning_effort in ("low", "medium", "high") else "high"
-                    ns_kwargs["extra_body"] = {"reasoning": {"effort": effort}}
+                    extra_body["reasoning"] = {"effort": effort}
                     logger.info("Reasoning enabled via extra_body: effort=%s", effort)
+                if extra_body:
+                    ns_kwargs["extra_body"] = extra_body
 
                 assistant_text = ""
                 thinking_text = ""
@@ -748,8 +754,19 @@ async def chat(req: Request):
                                 yield orjson.dumps(payload).decode() + "\n"
                             except Exception:
                                 pass
-                            # Guard: encourage schema-first workflow
+                            # Emit tool_start to show execution is in progress
                             start_ms = int(time.time() * 1000)
+                            try:
+                                yield orjson.dumps({
+                                    "type": "tool_start",
+                                    "id": tc.get("id"),
+                                    "name": fname,
+                                    "start_ms": start_ms,
+                                }).decode() + "\n"
+                                await asyncio.sleep(0)  # Flush to client before blocking
+                            except Exception:
+                                pass
+                            # Guard: encourage schema-first workflow
                             if fname == "sql_query":
                                 has_schema = any((m.get("role") == "tool" and m.get("name") == "sql_schema") for m in history)
                                 if not has_schema:

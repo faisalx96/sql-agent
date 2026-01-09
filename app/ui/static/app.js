@@ -682,6 +682,21 @@
                     assistantMsg.tools.push(item);
                   }
                   await nextTick();
+                } else if (evt.type === 'tool_start') {
+                  // Mark tool as executing (show spinner/progress)
+                  if (!assistantMsg.tools) assistantMsg.tools = [];
+                  const existing = assistantMsg.tools.find(t => t.id === evt.id);
+                  if (existing) {
+                    existing.executing = true;
+                    existing.start = (typeof evt.start_ms === 'number') ? evt.start_ms : Date.now();
+                  }
+                  // Also update timeline
+                  const tli = (assistantMsg.timeline||[]).find(x => x && x.type==='tool' && x.id===evt.id);
+                  if (tli) {
+                    tli.executing = true;
+                    tli.start = (typeof evt.start_ms === 'number') ? evt.start_ms : Date.now();
+                  }
+                  await nextTick();
                 } else if (evt.type === 'tool_result') {
                   sawToolResult = true;
                   afterTools = true;
@@ -692,6 +707,7 @@
                   const ee = (typeof evt.end_ms === 'number') ? evt.end_ms : null;
                   if (existing) {
                     existing.output = evt.output;
+                    existing.executing = false;
                     if (se != null) existing.start = se;
                     if (ee != null) existing.end = ee; else existing.end = Date.now();
                   } else {
@@ -707,7 +723,7 @@
                     const idx = (assistantMsg.timeline||[]).findIndex(x => x && x.type==='tool' && x.id===evt.id);
                     if (idx >= 0) {
                       const tli = assistantMsg.timeline[idx];
-                      tli.active = false; tli.start = (typeof evt.start_ms==='number')?evt.start_ms:null; tli.end = (typeof evt.end_ms==='number')?evt.end_ms:null; tli.result = evt.output;
+                      tli.active = false; tli.executing = false; tli.start = (typeof evt.start_ms==='number')?evt.start_ms:null; tli.end = (typeof evt.end_ms==='number')?evt.end_ms:null; tli.result = evt.output;
                       const txt = extractToolText(evt.output);
                       const skipFileTools = ['read_file', 'write_file', 'list_files', 'search_files'].includes(evt.name);
                       if (txt && !skipFileTools) {
