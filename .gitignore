@@ -13,6 +13,7 @@ build/
 
 # Misc
 .DS_Store
+AGENTS.MD
 
 # Runtime workspace (auto-created by app)
 workspace/

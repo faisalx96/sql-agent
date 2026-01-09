@@ -1,122 +1,113 @@
-SQL Agent (Python)
+# SQL Agent
 
-What this is
-- A minimal, opinionated recipe to spin up an agent quickly using the OpenAI Python SDK and function-calling tools, with a tiny web UI that “just works”.
-- Drop it into a repo and start iterating on POCs without wiring a custom UI each time.
+A minimal Python agent scaffold for querying databases via natural language. Uses OpenAI function calling + FastAPI with a lightweight Vue/Tailwind UI (no build step).
 
-What’s included
-- FastAPI app with a lightweight, modern UI (Vue 3 + Tailwind via CDN; no build step).
-- Agent core that supports tool-calling and a small standard toolset (list/read/write/search files within a workspace directory), plus SQL tools for schema + querying (read-only).
-- Live streaming: tool calls/results stream as they happen, followed by the assistant’s reply.
-- Pretty SQL view in the tool panel, plus a compact “Result preview” table for quick inspection.
-- Environment-driven config and a dedicated workspace folder for file operations.
-- Clear extension points to add tools and change the model or system prompt.
- - Server-side sessions: JSON-backed store under the workspace with APIs to list/get/rename/delete sessions.
+## Features
 
-Why not Streamlit? This aims for a native-feeling, dependency-light UI that runs anywhere you can start a web server. No ceremony, no extra app shell.
+- **Read-only SQL agent** — asks schema, writes SELECT/CTEs, returns human-friendly answers with inline charts
+- **Multi-database** — SQLite (default) or PostgreSQL via SQLAlchemy
+- **Live streaming** — tool calls/results stream as NDJSON, then assistant reply
+- **File tools** — list/read/write/search files in a sandboxed workspace
+- **Session management** — JSON-backed chat history with rename/delete APIs
+- **Optional tracing** — Langfuse integration for observability
+- **OpenRouter compatible** — swap providers without code changes
 
-Quickstart
-1) One environment (no mixing)
-   - Use the provided helper to create and use a local venv just for this project:
-     - bash scripts/dev.sh
-   - It will create `.venv/`, install dependencies from `requirements.txt` (includes langfuse), and run the server with that interpreter.
-   - Tip: Prefer `python -m uvicorn ...` through this script vs a global `uvicorn` to avoid PATH mixups.
+## Quickstart
 
-2) Configure
-   - cp .env.example .env
-   - Set OPENAI_API_KEY and optionally OPENAI_MODEL (defaults to gpt-4o-mini)
+```bash
+# 1. Setup env
+cp .env.example .env
+# Edit .env: set OPENAI_API_KEY
 
-3) Run
-   - Simple: bash scripts/dev.sh
-   - Manual (if you already activated .venv):
-     - python -m uvicorn app.server:app --reload --host ${APP_HOST:-127.0.0.1} --port ${APP_PORT:-8000}
-   - Open http://127.0.0.1:8000
+# 2. Run (creates venv, installs deps, starts server)
+bash scripts/dev.sh
 
-Folder layout
-- app/
-  - config.py: Loads env, creates workspace directory.
-  - agent/core.py: Agent orchestration and tool-call loop (utility; server currently streams directly).
-  - agent/tools.py: Built-in file tools and tool registry.
-  - agent/sql_tools.py: SQL tools (schema and read-only query).
-  - server.py: FastAPI server + endpoints; live tool + text streaming.
-  - ui/static/: Vue + Tailwind assets (CDN) for the chat UI.
-- scripts/
-  - seed_db.py: Seed/reset the SQLite DB with demo data (customers/products/orders).
-- workspace/: Safe area for file tools; persisted locally.
+# 3. Open http://127.0.0.1:8000
+```
 
-Config
-- OPENAI_API_KEY: Your API key
-- OPENAI_BASE_URL: Use custom base URL if you run via a proxy/gateway
-- OPENAI_MODEL: Default gpt-5-mini; switch to your org’s standard model
-- APP_HOST / APP_PORT: Web server bind
-- WORKSPACE_DIR: Filesystem root agents tools can touch
-- DATABASE_URL: Defaults to sqlite:///workspace/agent.db. Set to your DB if needed. The agent uses SQLite by default.
+### Seed demo data (optional)
 
-Extending tools
-- Add or modify tools in app/agent/tools.py. Each ToolSpec has name, description, JSON schema, and a Python function.
-- Tools are exposed to the model via OpenAI function calling. The server’s streaming loop executes tool calls and streams back results.
+```bash
+PYTHONPATH=. python scripts/seed_db.py --reset --customers 60 --products 50 --orders 500
+```
 
-Swapping in the OpenAI Agents SDK
-- Integration point: the chat.completions call inside app/server.py (the streaming loop). Swap it for your Agents SDK runtime and wire tool events accordingly.
-- Keep the messages list format {role, content} so the UI and session store keep working unchanged.
+## Configuration
 
-Notes on streaming
-- The server streams newline-delimited JSON (NDJSON) events:
-  - {"type":"tool_call", "id", "name", "arguments"}
-  - {"type":"tool_result", "id", "name", "output"}
-  - {"chunk":"..."} and {"done":true} for the assistant’s text
-- The UI shows live tool panels (with pretty SQL and JSON I/O), a “Result preview” grid for sql_query, and a live timer.
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OPENAI_API_KEY` | — | Required |
+| `OPENAI_MODEL` | `gpt-5-mini` | Model name |
+| `OPENAI_BASE_URL` | — | Custom endpoint (OpenRouter, Azure, etc.) |
+| `DATABASE_URL` | `sqlite:///workspace/agent.db` | SQLite or PostgreSQL connection string |
+| `APP_HOST` / `APP_PORT` | `127.0.0.1` / `8000` | Server bind |
+| `WORKSPACE_DIR` | `workspace` | Sandboxed file area |
+| `LANGFUSE_*` | — | Optional tracing (see `.env.example`) |
+| `TRACING_ENABLED` | `1` | Set `0` to disable |
 
-Session APIs
-- POST /api/new_chat {title?} → {chat_id}
-- GET  /api/sessions → {sessions:[{id,title,created_at,updated_at}]}
-- GET  /api/sessions/{chat_id} → {id,title,created_at,updated_at,messages:[...]}
-- PATCH /api/sessions/{chat_id} {title} → {ok:true}
-- DELETE /api/sessions/{chat_id} → {ok:true}
+### PostgreSQL
 
-Security considerations
-- File tools are constrained to WORKSPACE_DIR and reject path traversal. Still, treat this as a dev/POR scaffold, not a production sandbox.
+```env
+DATABASE_URL=postgresql://user:pass@host:5432/dbname
+```
 
-Common tweaks for POCs
-- Change the system prompt in app/server.py when creating the Agent.
-- Preload context: Push a system message at session start or call a tool that reads project docs.
-- Add custom tools: e.g., run linters, query a DB, call internal APIs (wrap them with careful auth and rate limiting).
+### OpenRouter
 
-Troubleshooting
-- ImportError / ModuleNotFoundError: Ensure you started via `bash scripts/dev.sh` or activated `.venv` in this repo. If your prompt shows another venv (or conda `base`) at the same time, deactivate it first, then run the script again.
-- 401 from OpenAI: Verify OPENAI_API_KEY, organization access, and model name.
-- Network-restricted env: Point OPENAI_BASE_URL to your internal gateway if applicable.
+```env
+OPENAI_BASE_URL=https://openrouter.ai/api/v1
+OPENAI_API_KEY=sk-or-v1-...
+OPENAI_MODEL=anthropic/claude-3.5-sonnet
+```
 
-Using OpenRouter
-- Set env for OpenRouter (no code changes needed):
-  - `OPENAI_BASE_URL=https://openrouter.ai/api/v1`
-  - Use your OpenRouter key via either `OPENAI_API_KEY=sk-or-v1-...` or `OPENROUTER_API_KEY=sk-or-v1-...`.
-  - Optional but recommended headers per OpenRouter docs (added automatically if provided):
-    - `OPENROUTER_SITE_URL=https://your-app.example.com` (sets `HTTP-Referer`)
-    - `OPENROUTER_APP_NAME=SQL Agent` (sets `X-Title`)
-- Model names: use OpenRouter model IDs (e.g., `openai/gpt-4o-mini`, `anthropic/claude-3.5-sonnet`, `meta-llama/llama-3.1-8b-instruct`).
-  - You can change the model from the UI dropdown; choose “Custom…” to enter any model ID not listed.
-  - Or set a default via `OPENAI_MODEL` before starting the server.
+## Project Structure
 
-License
-- Intended as an internal template/recipe. Add your org’s standard header/policy if needed.
+```
+app/
+├── server.py          # FastAPI app, streaming chat endpoint
+├── config.py          # Env loading
+├── db.py              # SQLAlchemy database abstraction
+├── sessions.py        # JSON session store
+├── tracing.py         # Langfuse wrapper
+├── agent/
+│   ├── core.py        # Agent loop (blocking)
+│   ├── tools.py       # File tools + ToolSpec registry
+│   └── sql_tools.py   # sql_schema, sql_query tools
+└── ui/static/         # Vue 3 + Tailwind (CDN)
+scripts/
+└── seed_db.py         # Seed/reset demo data
+```
 
-SQL Agent usage
-- The system prompt configures a read-only “data scientist” persona that answers with one short, business-friendly summary sentence (no tables by default).
-- Tools:
-  - sql_schema: discover tables/columns and row counts
-  - sql_query: run read-only SELECT/CTE and return rows (defaults to LIMIT 100)
-  - No DDL/DML tools are exposed; requests to change data/schema should be declined.
-- Naming guidance: Prefer human-readable names over IDs; join customers/products to include name/label columns; alias to short business labels.
+## Tools
 
-Initial database
-- Default DB path: workspace/agent.db (created on first connection).
-- Seed or reset with demo data:
-  - PYTHONPATH=. python scripts/seed_db.py --reset --customers 60 --products 50 --orders 500
-  - Omit --reset to keep existing rows and only fill if empty.
+| Tool | Description |
+|------|-------------|
+| `sql_schema` | Returns tables, columns, types, PKs, row counts |
+| `sql_query` | Executes read-only SELECT/CTE (max 1000 rows) |
+| `list_files` | Lists workspace files |
+| `read_file` | Reads UTF-8 file from workspace |
+| `write_file` | Writes file to workspace |
+| `search_files` | Case-insensitive substring search |
 
-Examples to try in the UI
-- "What tables are available?"
-- "How many orders per customer?"
-- "Which product generates the most revenue?"
-- "Average order value by city (summary only)."
+## API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/chat` | Streaming chat (NDJSON) |
+| `POST` | `/api/new_chat` | Create session |
+| `GET` | `/api/sessions` | List sessions |
+| `GET` | `/api/sessions/{id}` | Get session + messages |
+| `PATCH` | `/api/sessions/{id}` | Rename session |
+| `DELETE` | `/api/sessions/{id}` | Delete session |
+
+## Extending
+
+**Add tools:** Edit `app/agent/tools.py`. Each `ToolSpec` has name, description, JSON schema, and handler function.
+
+**Change system prompt:** Edit the `system_prompt` in `app/server.py` where `Agent` is instantiated.
+
+**Swap to Agents SDK:** Replace the streaming loop in `server.py` with your runtime; keep `{role, content}` message format for UI compatibility.
+
+## Troubleshooting
+
+- **ImportError**: Run via `bash scripts/dev.sh` or ensure `.venv` is activated
+- **401 from OpenAI**: Check `OPENAI_API_KEY` and model access
+- **Decimal serialization error (Postgres)**: Already handled in `db.py`
